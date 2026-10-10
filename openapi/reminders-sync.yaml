@@ -537,66 +537,10 @@ components:
     MutationBatchResponse:
       $ref: '../schemas/mutation-batch-response.schema.json'
     ListPage:
-      type: object
-      additionalProperties: false
-      required: [items, nextCursor, hasMore, serverTime]
-      properties:
-        items:
-          type: array
-          maxItems: 500
-          items:
-            $ref: '#/components/schemas/List'
-        nextCursor:
-          type: [string, 'null']
-          maxLength: 4096
-        hasMore:
-          type: boolean
-        serverTime:
-          type: string
-          format: date-time
+      $ref: '../schemas/list-page.schema.json'
     TaskPage:
-      type: object
-      additionalProperties: false
-      required: [items, nextCursor, hasMore, serverTime]
-      properties:
-        items:
-          type: array
-          maxItems: 500
-          items:
-            $ref: '#/components/schemas/Task'
-        nextCursor:
-          type: [string, 'null']
-          maxLength: 4096
-        hasMore:
-          type: boolean
-        serverTime:
-          type: string
-          format: date-time
+      $ref: '../schemas/task-page.schema.json'
     ChangesPage:
-      type: object
-      additionalProperties: false
-      required: [items, nextCursor, hasMore, serverTime, tombstoneRetentionDays]
-      properties:
-        items:
-          type: array
-          maxItems: 500
-          items:
-            $ref: '#/components/schemas/Change'
-        nextCursor:
-          type: [string, 'null']
-          maxLength: 4096
-        hasMore:
-          type: boolean
-        serverTime:
-          type: string
-          format: date-time
-        tombstoneRetentionDays:
-          type: integer
-          minimum: 30
-        warnings:
-          type: array
-          maxItems: 64
-          items:
-            $ref: '#/components/schemas/Warning'
+      $ref: '../schemas/changes-page.schema.json'
     Error:
       $ref: '../schemas/error.schema.json'

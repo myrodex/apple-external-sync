@@ -10,14 +10,21 @@
       "properties": {
         "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
         "op": { "const": "create" },
-        "resourceType": { "type": "string", "enum": ["list", "task"] },
-        "resource": {
-          "oneOf": [
-            { "$ref": "list-input.schema.json" },
-            { "$ref": "task-input.schema.json" }
-          ]
-        },
-        "clientResourceId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }
+        "resourceType": { "const": "list" },
+        "resource": { "$ref": "list-input.schema.json" },
+        "clientResourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "op", "resourceType", "resource"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "op": { "const": "create" },
+        "resourceType": { "const": "task" },
+        "resource": { "$ref": "task-input.schema.json" },
+        "clientResourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }
       }
     },
     {
@@ -27,14 +34,28 @@
       "properties": {
         "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
         "op": { "const": "update" },
-        "resourceType": { "type": "string", "enum": ["list", "task"] },
+        "resourceType": { "const": "list" },
         "resourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-        "fields": {
-          "type": "object",
-          "minProperties": 1,
-          "additionalProperties": true,
-          "description": "Partial object. Unknown fields are rejected; values are validated against the target resource schema. Null clears nullable fields."
-        },
+        "fields": { "$ref": "list-patch.schema.json" },
+        "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "allowFieldLoss": { "type": "boolean", "default": false }
+      },
+      "anyOf": [
+        { "required": ["expectedRevision"] },
+        { "required": ["expectedEtag"] }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "op", "resourceType", "resourceId", "fields"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "op": { "const": "update" },
+        "resourceType": { "const": "task" },
+        "resourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "fields": { "$ref": "task-patch.schema.json" },
         "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 },
         "allowFieldLoss": { "type": "boolean", "default": false }
@@ -51,11 +72,28 @@
       "properties": {
         "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
         "op": { "const": "delete" },
-        "resourceType": { "type": "string", "enum": ["list", "task"] },
+        "resourceType": { "const": "list" },
         "resourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
         "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 },
         "cascade": { "type": "boolean", "default": false }
+      },
+      "anyOf": [
+        { "required": ["expectedRevision"] },
+        { "required": ["expectedEtag"] }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "op", "resourceType", "resourceId"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "op": { "const": "delete" },
+        "resourceType": { "const": "task" },
+        "resourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 }
       },
       "anyOf": [
         { "required": ["expectedRevision"] },

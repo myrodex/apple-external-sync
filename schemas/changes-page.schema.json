@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Incremental changes page",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "nextCursor", "hasMore", "serverTime", "tombstoneRetentionDays"],
+  "properties": {
+    "items": { "type": "array", "maxItems": 500, "items": { "$ref": "change.schema.json" } },
+    "nextCursor": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "hasMore": { "type": "boolean" },
+    "serverTime": { "type": "string", "format": "date-time" },
+    "tombstoneRetentionDays": { "type": "integer", "minimum": 30 },
+    "warnings": { "type": "array", "maxItems": 64, "items": { "$ref": "warning.schema.json" } }
+  }
+}

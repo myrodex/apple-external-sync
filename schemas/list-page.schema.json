@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "List snapshot page",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "nextCursor", "hasMore", "serverTime"],
+  "properties": {
+    "items": { "type": "array", "maxItems": 500, "items": { "$ref": "list.schema.json" } },
+    "nextCursor": { "type": ["string", "null"], "maxLength": 4096 },
+    "hasMore": { "type": "boolean" },
+    "serverTime": { "type": "string", "format": "date-time" }
+  }
+}

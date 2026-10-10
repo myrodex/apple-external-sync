@@ -15,7 +15,6 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 try:
-    import yaml
     from jsonschema import Draft202012Validator, FormatChecker, RefResolver
 except ImportError as exc:  # pragma: no cover - exercised only without dev deps
     print(
@@ -75,81 +74,24 @@ def validate(name: str, instance: object, schema_path: Path) -> None:
 
 
 def validate_pages() -> None:
-    lists = load_json(EXAMPLES / "lists-page.json")
-    list_schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": ["items", "nextCursor", "hasMore", "serverTime"],
-        "properties": {
-            "items": {"type": "array", "items": {"$ref": "list.schema.json"}},
-            "nextCursor": {"type": ["string", "null"]},
-            "hasMore": {"type": "boolean"},
-            "serverTime": {"type": "string", "format": "date-time"},
-        },
-    }
-    validate("lists-page.json", lists, SCHEMAS / "list.schema.json") if False else None
-    # Validate each page envelope and each resource separately to keep the page
-    # schema intentionally local to the OpenAPI document.
-    resolver_store = schema_store()
-    resolver = RefResolver((SCHEMAS / "list-page.schema.json").as_uri(), list_schema, store=resolver_store)
-    errors = sorted(
-        Draft202012Validator(list_schema, resolver=resolver, format_checker=FormatChecker()).iter_errors(lists),
-        key=lambda error: list(error.path),
+    """Validate snapshot/change envelopes from their checked-in schemas."""
+    page_cases = (
+        ("lists-page.json", "list-page.schema.json", "items", "list.schema.json"),
+        ("tasks-page.json", "task-page.schema.json", "items", "task.schema.json"),
+        ("changes-page.json", "changes-page.schema.json", "items", "change.schema.json"),
     )
-    if errors:
-        raise ValueError("\n".join(f"  - lists-page.json: {error.message}" for error in errors))
-    for index, item in enumerate(lists["items"]):
-        validate(f"lists-page.json/items/{index}", item, SCHEMAS / "list.schema.json")
-
-    tasks = load_json(EXAMPLES / "tasks-page.json")
-    task_page_schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": ["items", "nextCursor", "hasMore", "serverTime"],
-        "properties": {
-            "items": {"type": "array", "items": {"$ref": "task.schema.json"}},
-            "nextCursor": {"type": ["string", "null"]},
-            "hasMore": {"type": "boolean"},
-            "serverTime": {"type": "string", "format": "date-time"},
-        },
-    }
-    resolver = RefResolver((SCHEMAS / "task-page.schema.json").as_uri(), task_page_schema, store=resolver_store)
-    errors = sorted(
-        Draft202012Validator(task_page_schema, resolver=resolver, format_checker=FormatChecker()).iter_errors(tasks),
-        key=lambda error: list(error.path),
-    )
-    if errors:
-        raise ValueError("\n".join(f"  - tasks-page.json: {error.message}" for error in errors))
-    for index, item in enumerate(tasks["items"]):
-        validate(f"tasks-page.json/items/{index}", item, SCHEMAS / "task.schema.json")
-
-    changes = load_json(EXAMPLES / "changes-page.json")
-    change_page_schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "required": ["items", "nextCursor", "hasMore", "serverTime", "tombstoneRetentionDays"],
-        "properties": {
-            "items": {"type": "array", "items": {"$ref": "change.schema.json"}},
-            "nextCursor": {"type": ["string", "null"]},
-            "hasMore": {"type": "boolean"},
-            "serverTime": {"type": "string", "format": "date-time"},
-            "tombstoneRetentionDays": {"type": "integer", "minimum": 30},
-            "warnings": {"type": "array", "items": {"$ref": "warning.schema.json"}},
-        },
-    }
-    resolver = RefResolver((SCHEMAS / "change-page.schema.json").as_uri(), change_page_schema, store=resolver_store)
-    errors = sorted(
-        Draft202012Validator(change_page_schema, resolver=resolver, format_checker=FormatChecker()).iter_errors(changes),
-        key=lambda error: list(error.path),
-    )
-    if errors:
-        raise ValueError("\n".join(f"  - changes-page.json: {error.message}" for error in errors))
-    for index, item in enumerate(changes["items"]):
-        validate(f"changes-page.json/items/{index}", item, SCHEMAS / "change.schema.json")
+    for example_name, page_schema_name, items_key, item_schema_name in page_cases:
+        page = load_json(EXAMPLES / example_name)
+        validate(example_name, page, SCHEMAS / page_schema_name)
+        for index, item in enumerate(page[items_key]):
+            validate(f"{example_name}/{items_key}/{index}", item, SCHEMAS / item_schema_name)
 
 
 def main() -> int:
     try:
+        schema_paths = sorted(SCHEMAS.glob("*.schema.json"))
+        for schema_path in schema_paths:
+            Draft202012Validator.check_schema(load_json(schema_path))
         for example_name, schema_name in EXAMPLE_CASES:
             if schema_name in {"list-page", "task-page", "changes-page"}:
                 continue
@@ -158,7 +100,7 @@ def main() -> int:
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"Protocol validation failed:\n{exc}", file=sys.stderr)
         return 1
-    print(f"Validated {len(list(SCHEMAS.glob('*.schema.json')))} schemas and {len(EXAMPLE_CASES)} examples.")
+    print(f"Validated {len(schema_paths)} schemas and {len(EXAMPLE_CASES)} examples.")
     return 0
 
 
