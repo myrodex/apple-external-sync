@@ -145,6 +145,61 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertNil(removed)
     }
 
+    func testGenericRESTRejectsCrossOriginPaginationBeforeSendingBearerToken() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"items\":[],\"nextLink\":\"https://evil.example.test/next\"}")
+        ])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.example.test")!,
+            lists: RESTCollectionDescriptor(path: "/lists", pagination: RESTPaginationDescriptor(mode: .nextLink, itemsPath: "items", nextCursorPath: nil, nextLinkPath: "nextLink", pageSizeQueryName: nil)),
+            tasks: RESTCollectionDescriptor(path: "/tasks", pagination: .none)
+        )
+        let adapter = GenericRESTAdapter(account: SyncAccount(provider: .genericREST, accountID: "rest"), configuration: config, transport: transport, accessToken: { "secret" })
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("Cross-origin pagination must be rejected")
+        } catch let error as SyncAdapterError {
+            XCTAssertTrue(error.localizedDescription.contains("cross-origin"), "actual error: \(error)")
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    func testGenericRESTRejectsAbsoluteConfiguredEndpointBeforeSendingBearerToken() async throws {
+        let transport = MockHTTPTransport([])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.example.test")!,
+            lists: RESTCollectionDescriptor(path: "https://rest.example.test/lists", pagination: .none),
+            tasks: RESTCollectionDescriptor(path: "/tasks", pagination: .none)
+        )
+        let adapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "rest"),
+            configuration: config,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("Absolute configured endpoints must be rejected")
+        } catch let error as SyncAdapterError {
+            XCTAssertTrue(error.localizedDescription.contains("relative and same-origin"), "actual error: \(error.localizedDescription)")
+        }
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testPendingOAuthConfigurationCanBeExpiredAndRemoved() async throws {
+        let store = InMemoryOAuthPendingAuthorizationStore()
+        let request = OAuthAuthorizationRequest(provider: .microsoftGraph, authorizationURL: URL(string: "https://login.test")!, state: "s", codeVerifier: "v")
+        let now = Date(timeIntervalSince1970: 20_000)
+        try await store.save(PendingOAuthAuthorization(request: request, expiresAt: now.addingTimeInterval(5)))
+        let active = try await store.load(at: now)
+        XCTAssertNotNil(active)
+        let expired = try await store.load(at: now.addingTimeInterval(6))
+        XCTAssertNil(expired)
+    }
+
 }
 
 private struct MockResponse {

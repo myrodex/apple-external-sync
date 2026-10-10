@@ -25,6 +25,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     private var selectedListIDs: Set<String> = []
     private var changeTask: Task<Void, Never>?
     private let defaults: UserDefaults
+    private let localAccountID: String
     private let providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory]
     private let selectedScope: SelectedListScope
     private let pendingAuthorizationStore: any OAuthPendingAuthorizationStore
@@ -45,6 +46,10 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         self.changeSource = EventKitStoreChangeNotifications(eventStore: eventStore.eventStore)
         self.listMapping = InMemoryEventKitListMapping()
         self.defaults = defaults
+        let localAccountKey = "eventkit-account-id"
+        let localAccountID = defaults.string(forKey: localAccountKey) ?? UUID().uuidString.lowercased()
+        defaults.set(localAccountID, forKey: localAccountKey)
+        self.localAccountID = localAccountID
         self.providerFactories = providerFactories.isEmpty ? Self.defaultProviderFactories() : providerFactories
         self.pendingAuthorizationStore = pendingAuthorizationStore
         self.now = now
@@ -58,7 +63,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         try? await pendingAuthorizationStore.removeExpired(at: now())
         let provider = defaults.string(forKey: "provider").flatMap(SyncProviderChoice.init(rawValue:))
         if provider == .appleReminders {
-            account = SyncAccount(provider: .eventKit, accountID: "device")
+            account = SyncAccount(provider: .eventKit, accountID: localAccountID)
         }
         let permission = await eventStore.authorizationStatus()
         let lists = permission.canRead ? try await availableLists() : []
@@ -101,13 +106,16 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     public func connect(provider: SyncProviderChoice) async throws -> SyncAppSnapshot {
         switch provider {
         case .appleReminders:
+            if activeProviderFactory != nil || account != nil {
+                _ = try await disconnect()
+            }
             let permission = await eventStore.authorizationStatus()
             guard permission.canRead else {
                 snapshot.connection = connection(for: provider, permission: permission)
                 return snapshot
             }
             defaults.set(provider.rawValue, forKey: "provider")
-            account = SyncAccount(provider: .eventKit, accountID: "device")
+            account = SyncAccount(provider: .eventKit, accountID: localAccountID)
             snapshot.connection = SyncConnectionState(provider: provider, status: .connected, accountName: "This device", detail: "Apple Reminders is connected. Choose lists to sync.")
             snapshot.availableLists = try await availableLists()
             selectedListIDs = selectedListIDs.intersection(Set(snapshot.availableLists.map(\.id)))
@@ -117,6 +125,9 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
             return snapshot
         case .googleTasks, .microsoftToDo, .customREST:
             guard let factory = providerFactories[provider] else { throw SyncAppCoordinatorError.providerUnavailable(provider.title) }
+            if activeProviderFactory != nil || account != nil {
+                _ = try await disconnect()
+            }
             do {
                 let connection = try await factory.connect()
                 let activated = try await activate(connection, provider: provider, factory: factory)
@@ -160,10 +171,25 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         changeTask?.cancel()
         changeTask = nil
         let factory = activeProviderFactory
+        let disconnectingAccount = account
+        var firstError: Error?
+        if let disconnectingAccount {
+            do {
+                try await stateStore.remove(account: disconnectingAccount)
+            } catch {
+                firstError = error
+            }
+        }
+        do {
+            try await factory?.disconnect()
+        } catch {
+            firstError = firstError ?? error
+        }
         activeProviderFactory = nil
         activeAdapter = nil
         account = nil
         defaults.removeObject(forKey: "provider")
+        defaults.removeObject(forKey: "selected-list-ids")
         snapshot.connection = SyncConnectionState()
         snapshot.availableLists = []
         snapshot.selectedListIDs = []
@@ -172,7 +198,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         selectedListIDs.removeAll()
         await selectedScope.set([])
         try? await pendingAuthorizationStore.remove()
-        try await factory?.disconnect()
+        if let firstError { throw firstError }
         return snapshot
     }
 
@@ -366,13 +392,19 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     private static func defaultProviderFactories(bundle: Bundle = .main) -> [SyncProviderChoice: any SyncProviderConnectionFactory] {
         let redirectURI = (bundle.object(forInfoDictionaryKey: "ExternalSyncOAuthRedirectURI") as? String) ?? "appleexternalsync://oauth/callback"
         let googleClientID = bundle.object(forInfoDictionaryKey: "ExternalSyncGoogleClientID") as? String
+        let googleAccountID = bundle.object(forInfoDictionaryKey: "ExternalSyncGoogleAccountID") as? String
         let microsoftClientID = bundle.object(forInfoDictionaryKey: "ExternalSyncMicrosoftClientID") as? String
+        let microsoftAccountID = bundle.object(forInfoDictionaryKey: "ExternalSyncMicrosoftAccountID") as? String
         var result: [SyncProviderChoice: any SyncProviderConnectionFactory] = [:]
-        if let googleClientID, !googleClientID.isEmpty, !googleClientID.contains("$(") {
-            result[.googleTasks] = DeviceOAuthConnectionFactory.googleTasks(accountID: "device", clientID: googleClientID, redirectURI: redirectURI)
+        if let googleClientID, let googleAccountID,
+           !googleClientID.isEmpty, !googleClientID.contains("$("),
+           !googleAccountID.isEmpty, !googleAccountID.contains("$(") {
+            result[.googleTasks] = DeviceOAuthConnectionFactory.googleTasks(accountID: googleAccountID, clientID: googleClientID, redirectURI: redirectURI)
         }
-        if let microsoftClientID, !microsoftClientID.isEmpty, !microsoftClientID.contains("$(") {
-            result[.microsoftToDo] = DeviceOAuthConnectionFactory.microsoftToDo(accountID: "device", clientID: microsoftClientID, redirectURI: redirectURI)
+        if let microsoftClientID, let microsoftAccountID,
+           !microsoftClientID.isEmpty, !microsoftClientID.contains("$("),
+           !microsoftAccountID.isEmpty, !microsoftAccountID.contains("$(") {
+            result[.microsoftToDo] = DeviceOAuthConnectionFactory.microsoftToDo(accountID: microsoftAccountID, clientID: microsoftClientID, redirectURI: redirectURI)
         }
         if let json = bundle.object(forInfoDictionaryKey: "ExternalSyncRESTConfiguration") as? String,
            !json.isEmpty,

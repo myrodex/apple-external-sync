@@ -22,8 +22,12 @@
     <string>appleexternalsync://oauth/callback</string>
     <key>ExternalSyncGoogleClientID</key>
     <string>$(EXTERNAL_SYNC_GOOGLE_CLIENT_ID)</string>
+    <key>ExternalSyncGoogleAccountID</key>
+    <string>$(EXTERNAL_SYNC_GOOGLE_ACCOUNT_ID)</string>
     <key>ExternalSyncMicrosoftClientID</key>
     <string>$(EXTERNAL_SYNC_MICROSOFT_CLIENT_ID)</string>
+    <key>ExternalSyncMicrosoftAccountID</key>
+    <string>$(EXTERNAL_SYNC_MICROSOFT_ACCOUNT_ID)</string>
     <key>ExternalSyncRESTConfiguration</key>
     <string>$(EXTERNAL_SYNC_REST_CONFIGURATION_JSON)</string>
     <key>CFBundleURLTypes</key>

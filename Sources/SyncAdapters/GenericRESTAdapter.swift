@@ -19,6 +19,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     private let accessToken: @Sendable () async throws -> String
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let configurationError: SyncAdapterError?
 
     public init(
         account: SyncAccount,
@@ -35,6 +36,12 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         self.decoder = JSONDecoder()
         self.encoder.dateEncodingStrategy = .iso8601
         self.decoder.dateDecodingStrategy = .iso8601
+        do {
+            try configuration.validate()
+            self.configurationError = nil
+        } catch {
+            self.configurationError = .unavailable(error.localizedDescription)
+        }
         var values: Set<AdapterCapability> = [.lists, .fieldDiagnostics]
         if configuration.fieldCapabilities.support(for: .taskNotes) != .unsupported { values.insert(.taskNotes) }
         if configuration.fieldCapabilities.support(for: .taskDueDate) != .unsupported { values.insert(.dueDates) }
@@ -47,6 +54,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     }
 
     public func pullChanges(since cursor: String?) async throws -> RemoteChanges {
+        if let configurationError { throw configurationError }
         let token = try await accessToken()
         if let descriptor = configuration.changes {
             let page = try await fetchChanges(descriptor, since: cursor, token: token)
@@ -72,6 +80,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     }
 
     public func push(_ mutations: [RemoteMutation], cursor: String?) async throws -> PushResult {
+        if let configurationError { throw configurationError }
         guard !mutations.isEmpty else { return PushResult(accepted: 0, nextCursor: cursor, serverNow: Date()) }
         let token = try await accessToken()
         var accepted = 0
@@ -254,7 +263,13 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             query.append(URLQueryItem(name: pageSizeQueryName, value: String(pagination.pageSize)))
         }
 
-        let response = try await request(path: requestPath, method: "GET", token: token, query: query)
+        let response = try await request(
+            path: requestPath,
+            method: "GET",
+            token: token,
+            query: query,
+            allowAbsoluteSameOrigin: pagination.mode == .nextLink && cursor != nil
+        )
         let root = try decodeJSON(from: response)
         let rawItems = root.value(at: pagination.itemsPath) ?? {
             if case .array = root { return root }
@@ -388,14 +403,54 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         return try encoder.encode(root)
     }
 
-    private func request(path: String, method: String, token: String, query: [URLQueryItem] = [], body: Data? = nil, revision: String? = nil) async throws -> HTTPResponse {
+    private func request(
+        path: String,
+        method: String,
+        token: String,
+        query: [URLQueryItem] = [],
+        body: Data? = nil,
+        revision: String? = nil,
+        allowAbsoluteSameOrigin: Bool = false
+    ) async throws -> HTTPResponse {
         var headers: [String: String] = [:]
         if let revision { headers["If-Match"] = revision }
-        let request = try HTTPRequestBuilder.make(baseURL: configuration.baseURL, path: path, method: method, bearerToken: token, query: query, body: body, headers: headers)
+        guard configuration.baseURL.scheme?.lowercased() == "https", configuration.baseURL.host != nil else {
+            throw SyncAdapterError.unavailable("Generic REST requests require an HTTPS base URL.")
+        }
+        let request: URLRequest
+        if path.hasPrefix("//") {
+            throw SyncAdapterError.unavailable("The provider returned a cross-origin URL; bearer credentials were not sent.")
+        } else if let absolute = URL(string: path), absolute.scheme != nil {
+            guard allowAbsoluteSameOrigin, Self.sameOrigin(configuration.baseURL, absolute) else {
+                throw SyncAdapterError.unavailable("The provider returned a cross-origin URL; bearer credentials were not sent.")
+            }
+            guard var components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
+                throw SyncAdapterError.invalidResponse("The provider returned an invalid pagination URL.")
+            }
+            components.queryItems = (components.queryItems ?? []) + query
+            guard let resolved = components.url else {
+                throw SyncAdapterError.invalidResponse("The provider returned an invalid pagination URL.")
+            }
+            request = HTTPRequestBuilder.make(url: resolved, method: method, bearerToken: token, body: body, headers: headers)
+        } else {
+            request = try HTTPRequestBuilder.make(baseURL: configuration.baseURL, path: path, method: method, bearerToken: token, query: query, body: body, headers: headers)
+        }
         let response = try await transport.execute(request)
         if response.statusCode == 412 { throw SyncAdapterError.conditionalWriteFailed(remoteRevision: response.headers["etag"] ?? revision) }
         try HTTPRequestBuilder.checkSuccess(response)
         return response
+    }
+
+    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false),
+              let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false) else { return false }
+        let leftPort = left.port ?? (left.scheme?.lowercased() == "https" ? 443 : 80)
+        let rightPort = right.port ?? (right.scheme?.lowercased() == "https" ? 443 : 80)
+        return left.user == nil && left.password == nil
+            && right.user == nil && right.password == nil
+            && left.scheme?.lowercased() == right.scheme?.lowercased()
+            && left.host?.lowercased() == right.host?.lowercased()
+            && leftPort == rightPort
     }
 
     private func decodeJSON(from response: HTTPResponse) throws -> RESTJSONValue {

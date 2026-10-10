@@ -77,6 +77,36 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
         }
     }
 
+    /// Atomically removes account-owned canonical state from the single sync checkpoint.
+    /// Lower-level LocalStore rows intentionally remain untouched: those tables have no
+    /// account column and are not used by SyncEngine's account-scoped checkpoint.
+    public func remove(account: SyncAccount) async throws {
+        let current = try await load()
+        let next = current.removing(account: account)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let payload = try encoder.encode(next)
+            try beginTransaction()
+            do {
+                try execute("""
+                    INSERT INTO sync_state (id, payload, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
+                    """, bindings: [.blob(payload), .double(Date().timeIntervalSince1970)])
+                try execute("COMMIT;")
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
+        } catch let error as LocalStoreError {
+            throw error
+        } catch {
+            throw LocalStoreError.invalidData("Unable to remove account state: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - LocalStore
 
     public func apply(_ transaction: StoreTransaction) async throws {

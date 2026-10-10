@@ -33,7 +33,7 @@ For a device or distributable archive, open the project in Xcode, select a devel
 
 ## Optional OAuth configuration
 
-OAuth client IDs are deliberately not committed. Pass them as build settings or set them in an untracked `.xcconfig`:
+OAuth client IDs and stable authenticated account identifiers are deliberately not committed. Pass them as build settings or set them in an untracked `.xcconfig`. The account identifiers are provider-account-specific (for example a Google subject/email-derived stable identifier or Entra object ID), never the generic `device` placeholder:
 
 ```sh
 xcodebuild \
@@ -42,6 +42,8 @@ xcodebuild \
   -sdk iphonesimulator \
   EXTERNAL_SYNC_GOOGLE_CLIENT_ID='your-public-google-client-id' \
   EXTERNAL_SYNC_MICROSOFT_CLIENT_ID='your-public-entra-client-id' \
+  EXTERNAL_SYNC_GOOGLE_ACCOUNT_ID='stable-google-account-id' \
+  EXTERNAL_SYNC_MICROSOFT_ACCOUNT_ID='stable-entra-account-id' \
   CODE_SIGNING_ALLOWED=NO \
   build
 ```
@@ -52,7 +54,7 @@ Custom REST can be enabled by setting `EXTERNAL_SYNC_REST_CONFIGURATION_JSON` to
 
 ```json
 {
-  "accountID": "device",
+  "accountID": "stable-rest-account-id",
   "keychainService": "dev.myrodex.external-sync.oauth",
   "configuration": {
     "baseURL": "https://sync.example.test",

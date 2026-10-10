@@ -329,6 +329,7 @@ public enum GenericRESTConfigurationError: Error, LocalizedError, Equatable, Sen
     case invalidJSON(String)
     case insecureBaseURL
     case missingEndpointPath(String)
+    case unsafeEndpointPath(String)
     case unsupportedHTTPMethod(String)
 
     public var errorDescription: String? {
@@ -336,6 +337,7 @@ public enum GenericRESTConfigurationError: Error, LocalizedError, Equatable, Sen
         case .invalidJSON(let message): return "Invalid generic REST configuration: \(message)"
         case .insecureBaseURL: return "Generic REST integrations must use an HTTPS base URL."
         case .missingEndpointPath(let endpoint): return "Generic REST endpoint path is missing: \(endpoint)."
+        case .unsafeEndpointPath(let path): return "Generic REST endpoint path must be relative and same-origin: \(path)."
         case .unsupportedHTTPMethod(let method): return "Unsupported generic REST mutation method: \(method)."
         }
     }
@@ -355,7 +357,13 @@ public extension GenericRESTConfiguration {
     }
 
     func validate(requireHTTPS: Bool = true) throws {
-        guard baseURL.host != nil else { throw GenericRESTConfigurationError.invalidJSON("baseURL must include a host.") }
+        guard let baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              baseComponents.host != nil else {
+            throw GenericRESTConfigurationError.invalidJSON("baseURL must include a host.")
+        }
+        guard baseComponents.user == nil, baseComponents.password == nil else {
+            throw GenericRESTConfigurationError.invalidJSON("baseURL must not contain credentials.")
+        }
         if requireHTTPS && baseURL.scheme?.lowercased() != "https" {
             throw GenericRESTConfigurationError.insecureBaseURL
         }
@@ -363,13 +371,21 @@ public extension GenericRESTConfiguration {
         try validateCollection(tasks, label: "tasks")
         try validateMutation(listMutations, label: "listMutations")
         try validateMutation(taskMutations, label: "taskMutations")
-        if let changes {
-            guard !changes.path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath("changes") }
-        }
+        if let changes { try validatePath(changes.path, label: "changes") }
     }
 
     private func validateCollection(_ collection: RESTCollectionDescriptor, label: String) throws {
-        guard !collection.path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath(label) }
+        try validatePath(collection.path, label: label)
+    }
+
+    private func validatePath(_ path: String, label: String) throws {
+        guard !path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath(label) }
+        guard URL(string: path)?.scheme == nil,
+              !path.hasPrefix("//"),
+              !path.contains("?"),
+              !path.contains("#") else {
+            throw GenericRESTConfigurationError.unsafeEndpointPath(path)
+        }
     }
 
     private func validateMutation(_ endpoint: RESTMutationEndpoint, label: String) throws {
@@ -377,6 +393,9 @@ public extension GenericRESTConfiguration {
         for method in methods where !["POST", "PUT", "PATCH", "DELETE"].contains(method.uppercased()) {
             throw GenericRESTConfigurationError.unsupportedHTTPMethod(method)
         }
+        if let createPath = endpoint.createPath { try validatePath(createPath, label: "\(label).createPath") }
+        if let updatePath = endpoint.updatePath { try validatePath(updatePath, label: "\(label).updatePath") }
+        if let deletePath = endpoint.deletePath { try validatePath(deletePath, label: "\(label).deletePath") }
         if endpoint.createPath == nil && endpoint.updatePath == nil && endpoint.deletePath == nil { return }
     }
 }

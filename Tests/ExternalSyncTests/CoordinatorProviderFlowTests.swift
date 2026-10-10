@@ -4,6 +4,7 @@ import XCTest
 @testable import SyncAdapters
 @testable import SyncContracts
 @testable import SyncDomain
+@testable import SyncStore
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -11,6 +12,20 @@ import FoundationNetworking
 
 @MainActor
 final class CoordinatorProviderFlowTests: XCTestCase {
+    func testProviderAccountIDsKeepTokensIsolatedWhenSwitchingAccounts() async throws {
+        let store = InMemoryOAuthTokenStore()
+        let transport = CoordinatorMockTransport(responses: [])
+        let first = DeviceOAuthConnectionFactory.googleTasks(accountID: "google-subject-a", clientID: "client", redirectURI: "appleexternalsync://oauth/callback", tokenStore: store, transport: transport, baseURL: URL(string: "https://tasks.test")!)
+        let second = DeviceOAuthConnectionFactory.googleTasks(accountID: "google-subject-b", clientID: "client", redirectURI: "appleexternalsync://oauth/callback", tokenStore: store, transport: transport, baseURL: URL(string: "https://tasks.test")!)
+        try await store.save(OAuthToken(accessToken: "a", refreshToken: "ra"), for: first.account)
+        XCTAssertEqual(first.account.accountID, "google-subject-a")
+        XCTAssertEqual(second.account.accountID, "google-subject-b")
+        let firstToken = try await store.token(for: first.account)
+        let secondToken = try await store.token(for: second.account)
+        XCTAssertEqual(firstToken?.accessToken, "a")
+        XCTAssertNil(secondToken)
+    }
+
     func testCoordinatorRoutesOAuthCallbackValidatesStateAndSupportsReconnect() async throws {
         let transport = CoordinatorMockTransport(responses: [
             .json("{\"access_token\":\"access-1\",\"refresh_token\":\"refresh-1\",\"expires_in\":3600}"),
@@ -137,6 +152,51 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertNil(pendingAfterCompletion)
     }
 
+    func testDisconnectRemovesScopedSQLiteStateWithoutAffectingAnotherAccount() async throws {
+        let transport = CoordinatorMockTransport(responses: [
+            .json("{\"items\":[{\"id\":\"l1\",\"title\":\"Work\"}]}"),
+            .json("{\"items\":[]}")
+        ])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://privacy.test")!,
+            lists: RESTCollectionDescriptor(path: "/lists", pagination: .none),
+            tasks: RESTCollectionDescriptor(path: "/tasks", pagination: .none)
+        )
+        let account = SyncAccount(provider: .genericREST, accountID: "privacy-account")
+        let other = SyncAccount(provider: .genericREST, accountID: "other-account")
+        let factory = GenericRESTConnectionFactory(accountID: account.accountID, configuration: config, transport: transport, accessToken: { "token" })
+        let suiteName = "CoordinatorProviderFlowTests.\(UUID().uuidString)"
+        let defaults = try temporaryDefaults(suiteName: suiteName)
+        let databaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sync-\(UUID().uuidString).sqlite")
+        let store = try SQLiteLocalStore(url: databaseURL)
+        let removedListID = SyncID.deterministic(namespace: "removed")
+        let retainedListID = SyncID.deterministic(namespace: "retained")
+        let seeded = SyncState(
+            lists: [
+                CanonicalList(id: removedListID, name: "Removed", createdAt: Date(), updatedAt: Date()),
+                CanonicalList(id: retainedListID, name: "Retained", createdAt: Date(), updatedAt: Date())
+            ],
+            listMappings: [
+                ListMapping(account: account, canonicalListID: removedListID, remoteListID: "r1", lastSeenAt: Date()),
+                ListMapping(account: other, canonicalListID: retainedListID, remoteListID: "r2", lastSeenAt: Date())
+            ],
+            cursors: [SyncCursor(account: account, value: "cursor-a", updatedAt: Date()), SyncCursor(account: other, value: "cursor-b", updatedAt: Date())]
+        )
+        try await store.save(seeded)
+        let coordinator = try ProductionSyncCoordinator(databaseURL: databaseURL, defaults: defaults, providerFactories: [.customREST: factory])
+        _ = try await coordinator.connect(provider: .customREST)
+        _ = try await coordinator.disconnect()
+        let result = try await store.load()
+        XCTAssertFalse(result.lists.contains { $0.id == removedListID })
+        XCTAssertTrue(result.lists.contains { $0.id == retainedListID })
+        XCTAssertFalse(result.listMappings.contains { $0.account == account })
+        XCTAssertTrue(result.listMappings.contains { $0.account == other })
+        XCTAssertNil(result.cursor(for: account))
+        XCTAssertNotNil(result.cursor(for: other))
+        defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: databaseURL)
+    }
+
     func testGenericRESTConfigurationDecodesAppJSONWithDefaultedFieldsAndEndpoints() throws {
         let json = Data("""
         {
@@ -175,6 +235,40 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertEqual(settings.configuration.lists.pagination.cursorQueryName, "cursor")
         XCTAssertEqual(settings.configuration.listMutations.updatePath, "/collections/{id}")
         XCTAssertEqual(settings.configuration.changes?.listItemsPath.rawValue, "lists")
+    }
+
+    func testGenericRESTConfigurationRejectsCrossOriginOrInsecureEndpoints() throws {
+        let crossOrigin = Data("""
+        {
+          "accountID": "rest",
+          "keychainService": "test.oauth",
+          "configuration": {
+            "baseURL": "https://rest.example.test",
+            "lists": { "path": "https://evil.example.test/lists" },
+            "tasks": { "path": "/tasks" }
+          }
+        }
+        """.utf8)
+        XCTAssertThrowsError(try GenericRESTConnectionSettings(jsonData: crossOrigin)) { error in
+            guard case .unsafeEndpointPath = error as? GenericRESTConfigurationError else {
+                return XCTFail("Expected unsafe endpoint rejection, got \(error)")
+            }
+        }
+
+        let insecure = Data("""
+        {
+          "accountID": "rest",
+          "keychainService": "test.oauth",
+          "configuration": {
+            "baseURL": "http://rest.example.test",
+            "lists": { "path": "/lists" },
+            "tasks": { "path": "/tasks" }
+          }
+        }
+        """.utf8)
+        XCTAssertThrowsError(try GenericRESTConnectionSettings(jsonData: insecure)) { error in
+            XCTAssertEqual(error as? GenericRESTConfigurationError, .insecureBaseURL)
+        }
     }
 
     func testCoordinatorExecutesConfiguredGenericRESTMutationThroughEngine() async throws {
