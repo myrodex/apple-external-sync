@@ -36,7 +36,7 @@
     },
     "providerRefs": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 32,
       "items": { "$ref": "provider-ref.schema.json" }
     },

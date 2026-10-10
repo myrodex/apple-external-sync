@@ -35,8 +35,8 @@
           "additionalProperties": true,
           "description": "Partial object. Unknown fields are rejected; values are validated against the target resource schema. Null clears nullable fields."
         },
-        "expectedRevision": { "type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991 },
-        "expectedEtag": { "type": ["string", "null"], "minLength": 1, "maxLength": 512 },
+        "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 },
         "allowFieldLoss": { "type": "boolean", "default": false }
       },
       "anyOf": [
@@ -53,8 +53,8 @@
         "op": { "const": "delete" },
         "resourceType": { "type": "string", "enum": ["list", "task"] },
         "resourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
-        "expectedRevision": { "type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991 },
-        "expectedEtag": { "type": ["string", "null"], "minLength": 1, "maxLength": 512 },
+        "expectedRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expectedEtag": { "type": "string", "minLength": 1, "maxLength": 512 },
         "cascade": { "type": "boolean", "default": false }
       },
       "anyOf": [

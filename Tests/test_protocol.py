@@ -50,6 +50,18 @@ class ProtocolSchemaTests(unittest.TestCase):
         validator = validate_protocol.validator_for(ROOT / "schemas/mutation.schema.json")
         self.assertTrue(list(validator.iter_errors(operation)))
 
+    def test_null_compare_and_swap_precondition_is_not_a_precondition(self) -> None:
+        operation = {
+            "operationId": "update_1",
+            "op": "update",
+            "resourceType": "task",
+            "resourceId": "task_1",
+            "fields": {"title": "new title"},
+            "expectedEtag": None,
+        }
+        validator = validate_protocol.validator_for(ROOT / "schemas/mutation.schema.json")
+        self.assertTrue(list(validator.iter_errors(operation)))
+
 
 if __name__ == "__main__":
     unittest.main()
