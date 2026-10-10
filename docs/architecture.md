@@ -10,8 +10,9 @@ This repository is a Swift Package Manager monorepo for a provider-neutral remin
 | `Sources/SyncDomain` | Domain-level sync state, tombstones, conflicts, and clock abstractions. | Pure Swift domain contracts. |
 | `Sources/SyncContracts` | Adapter-facing remote resource, mutation, capability, and error contracts. | Pure Swift serialization contracts. |
 | `Sources/SyncAdapters` | Provider adapters and HTTP transport (Apple/EventKit integration is platform-owned). | Network/provider boundary; adapters translate into canonical contracts. |
-| `Sources/SyncEngine` | Pull/push orchestration, three-way merge, cursor advancement, and conflict creation. | Depends on adapters and a `LocalStore`; owns sequencing, not storage. |
-| `Sources/SyncStore` | `LocalStore` protocol plus SQLite and in-memory implementations. | The only sync-state persistence boundary. Transactions are atomic from the engine's point of view. |
+| `Sources/SyncEngine` | Pull/push orchestration, three-way merge, cursor advancement, and conflict creation. | Depends on adapter contracts and `SyncStateStore`; owns sequencing, not storage. |
+| `Sources/SyncAppSupport` | Runtime composition for device apps. | Wires injected provider adapters to `SyncEngine` and `SQLiteLocalStore`; no provider login or hidden global state. |
+| `Sources/SyncStore` | `SyncStateStore` plus transactional `LocalStore` APIs, SQLite production implementation, and in-memory test doubles. | `SQLiteLocalStore` stores the engine checkpoint in one canonical `sync_state` row and keeps lower-level mappings/snapshots/tombstones transactional. |
 | `Apps/iOS`, `Apps/macOS` | Reserved locations for future platform wrappers. The package currently keeps the SwiftUI app shell in `Sources/ExternalSync/AppShell` for previews/tests. | User-device boundary. Provider credentials stay in platform keychain facilities. |
 | `Relay` | Optional stateless Vapor HTTP shell for deployment wiring and health checks. | No database, token store, or provider credentials. It is intentionally not a sync implementation. |
 | `schemas` | Draft 2020-12 JSON Schemas for payload validation. | Canonical machine-readable contract. |
@@ -20,14 +21,14 @@ This repository is a Swift Package Manager monorepo for a provider-neutral remin
 | `examples` | Valid request/response fixtures used by docs and contract checks. | Non-production data only. |
 | `Tests` | Unit, integration, and contract tests. | Tests must exercise failure paths, retries, conflicts, and retention—not only happy paths. |
 
-The package graph should remain acyclic: canonical/domain modules do not import adapters or stores; adapters do not reach into store implementations; app shells compose the graph. If a new feature needs a dependency in the opposite direction, introduce a protocol/value type at the lower boundary rather than importing a higher layer.
+The package graph should remain acyclic: canonical/domain modules do not import adapters or stores; adapters do not reach into store implementations; app shells compose the graph. `SyncEngine` depends only on `SyncStateStore`, while `SQLiteLocalStore` conforms to both `SyncStateStore` and the lower-level `LocalStore` protocol. If a new feature needs a dependency in the opposite direction, introduce a protocol/value type at the lower boundary rather than importing a higher layer.
 
 ## Runtime data flow
 
 1. A platform adapter reads provider changes and normalizes them into `RemoteChange` values.
-2. `SyncEngine` loads the last cursor, canonical snapshots, mappings, and tombstones from `LocalStore`.
+2. `SyncEngine` loads the complete canonical checkpoint (lists, tasks, replicas, mappings, conflicts, tombstones, and cursor) through `SyncStateStore`. The production `SQLiteLocalStore` persists this checkpoint in SQLite; the lower-level `LocalStore` tables remain available for APIs that need independently queryable records.
 3. The engine applies changes using explicit identity mappings and a field-level three-way merge. Concurrent edits produce durable conflicts; wall-clock ordering is never a conflict resolver.
-4. The engine writes the new state and cursor in one store transaction. Cursor advancement happens only after every change in the page is durable.
+4. The engine writes the new state and cursor as one SQLite checkpoint update. Cursor advancement happens only after every change in the page is durable; rejected pushes leave the previous cursor so the page is replayed safely.
 5. Outbound mutations use conditional writes and idempotency where the provider supports them. Provider field loss is surfaced as a capability/warning decision, never silently discarded.
 6. The optional relay can expose protocol-shaped routes, but it must delegate to an explicitly supplied backend before serving account data. A relay with no backend returns a structured `not_configured` response rather than inventing in-memory persistence.
 

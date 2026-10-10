@@ -8,8 +8,9 @@ Apple External Sync is a Swift 6 package and protocol for synchronizing Apple Re
 - `Sources/SyncDomain` — domain state, conflicts, tombstones, and clocks.
 - `Sources/SyncContracts` — adapter-facing provider contracts, capabilities, mutations, and errors.
 - `Sources/SyncAdapters` — provider adapters and HTTP transport.
-- `Sources/SyncEngine` — cursor-safe pull/push orchestration and conflict handling.
-- `Sources/SyncStore` — `LocalStore` plus SQLite and in-memory implementations.
+- `Sources/SyncEngine` — cursor-safe pull/push orchestration, deterministic three-way merges, conflict queueing, tombstone retention, and retry-safe cursor advancement.
+- `Sources/SyncStore` — SQLite-backed canonical sync checkpoints (`SyncStateStore`) plus the lower-level transactional `LocalStore` API and in-memory test doubles. Production runtime uses SQLite; JSON-file state persistence is intentionally not provided.
+- `Sources/SyncAppSupport` — production composition boundary; `SyncRuntime` wires `SyncEngine` to `SQLiteLocalStore` and keeps provider login device-only.
 - `Apps/` — reserved platform-app locations; the current SwiftUI app shell lives under `Sources/ExternalSync/AppShell` so it can be previewed and tested in the package.
 - `Relay/` — optional stateless Vapor deployment shell; it has no persistence or provider credentials.
 - `schemas/`, `openapi/`, `examples/` — JSON Schema, OpenAPI, and wire-contract fixtures.
@@ -39,7 +40,7 @@ swift test --package-path Relay --parallel
 swift run --package-path Relay
 ```
 
-The relay's `/healthz` endpoint reports process liveness. `/readyz` and `/v1/capabilities` deliberately return a structured `503 not_configured` response because no durable, account-authorized backend is implemented.
+The relay's `/healthz` endpoint reports process liveness. `/readyz` and `/v1/capabilities` deliberately return a structured `503 not_configured` response because no durable, account-authorized backend is implemented. Device apps use `SyncRuntimeConfiguration(databaseURL:)`, which persists the complete canonical checkpoint in SQLite.
 
 ## Security and privacy
 
