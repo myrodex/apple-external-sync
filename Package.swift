@@ -26,6 +26,6 @@ let package = Package(
         .testTarget(name: "SyncAdaptersTests", dependencies: ["SyncAdapters", "SyncContracts", "SyncDomain"], path: "Tests/SyncAdaptersTests"),
         .testTarget(name: "SyncStoreTests", dependencies: ["SyncStore", "SyncDomain"], path: "Tests/SyncStoreTests"),
         .testTarget(name: "SyncEngineTests", dependencies: ["SyncEngine", "SyncAdapters", "SyncContracts", "SyncDomain", "SyncStore"], path: "Tests/SyncEngineTests"),
-        .testTarget(name: "ExternalSyncTests", dependencies: ["ExternalSync"], path: "Tests/ExternalSyncTests")
+        .testTarget(name: "ExternalSyncTests", dependencies: ["ExternalSync", "SyncAdapters", "SyncContracts", "SyncDomain", "SyncAppSupport"], path: "Tests/ExternalSyncTests")
     ]
 )

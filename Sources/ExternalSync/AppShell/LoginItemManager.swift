@@ -1,16 +1,32 @@
 import Foundation
 
+public enum LoginItemTarget: String, Codable, Sendable {
+    case mainApplication
+    case bundledHelper
+    case unsupported
+
+    public var title: String {
+        switch self {
+        case .mainApplication: return "Main app at login"
+        case .bundledHelper: return "Bundled background helper"
+        case .unsupported: return "Unavailable on this platform"
+        }
+    }
+}
+
 @MainActor
 public protocol LoginItemManaging: AnyObject {
     var isEnabled: Bool { get }
     var isSupported: Bool { get }
     var requiresApproval: Bool { get }
+    var target: LoginItemTarget { get }
     func setEnabled(_ enabled: Bool) throws
     func openSystemSettings()
 }
 
 public extension LoginItemManaging {
     var requiresApproval: Bool { false }
+    var target: LoginItemTarget { .unsupported }
     func openSystemSettings() {}
 }
 
@@ -19,6 +35,7 @@ public final class UnsupportedLoginItemManager: LoginItemManaging {
     public let isSupported = false
     public private(set) var isEnabled = false
     public let requiresApproval = false
+    public let target: LoginItemTarget = .unsupported
 
     public init() {}
 
@@ -39,6 +56,7 @@ import ServiceManagement
 @MainActor
 public final class MacOSLoginItemManager: LoginItemManaging {
     public let isSupported = true
+    public let target: LoginItemTarget
     private let service: SMAppService
 
     /// When `helperBundleIdentifier` is provided, the manager controls the bundled
@@ -48,8 +66,10 @@ public final class MacOSLoginItemManager: LoginItemManaging {
     public init(helperBundleIdentifier: String? = nil) {
         if let helperBundleIdentifier, !helperBundleIdentifier.isEmpty {
             service = SMAppService.loginItem(identifier: helperBundleIdentifier)
+            target = .bundledHelper
         } else {
             service = .mainApp
+            target = .mainApplication
         }
     }
 
@@ -79,7 +99,8 @@ public final class MacOSLoginItemManager: LoginItemManaging {
 public enum LoginItemManagerFactory {
     public static func makeDefault() -> any LoginItemManaging {
         #if os(macOS)
-        return MacOSLoginItemManager()
+        let helperIdentifier = Bundle.main.object(forInfoDictionaryKey: "ExternalSyncLoginItemBundleIdentifier") as? String
+        return MacOSLoginItemManager(helperBundleIdentifier: helperIdentifier)
         #else
         return UnsupportedLoginItemManager()
         #endif

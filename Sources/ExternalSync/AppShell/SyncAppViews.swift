@@ -411,6 +411,9 @@ public struct SyncSettingsView: View {
                         )
                         .foregroundStyle(model.automaticSyncEnabled ? .green : .secondary)
                     }
+                    Text("Launch target: \(model.automaticSyncTarget.title)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("This uses the macOS login-item service. It does not duplicate the sync engine.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

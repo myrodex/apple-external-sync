@@ -1,4 +1,5 @@
 import Foundation
+import SyncDomain
 
 /// The small boundary consumed by SwiftUI. Implementations belong to the sync
 /// runtime and are responsible for adapters, persistence, merge policy, and
@@ -11,8 +12,17 @@ public protocol SyncAppCoordinator: Sendable {
     func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot
     func disconnect() async throws -> SyncAppSnapshot
     func updateListSelection(_ selectedListIDs: Set<String>) async throws -> SyncAppSnapshot
+    func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot
     func syncNow() async throws -> SyncAppSnapshot
     func resolveConflict(id: String, resolution: SyncConflictResolution) async throws -> SyncAppSnapshot
+}
+
+public extension SyncAppCoordinator {
+    /// Coordinators that do not own an editable local task/list surface may retain the
+    /// protocol's read/sync contract without pretending a local change was persisted.
+    func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot {
+        throw SyncAppCoordinatorError.localChangesUnsupported
+    }
 }
 
 /// A deterministic coordinator for SwiftUI previews, documentation screenshots,
@@ -67,6 +77,13 @@ public actor PreviewSyncCoordinator: SyncAppCoordinator {
         return snapshot
     }
 
+    public func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot {
+        // Preview state is intentionally provider-neutral; the production coordinator
+        // delegates this call to SyncEngine and durable storage.
+        snapshot.lastError = nil
+        return snapshot
+    }
+
     public func syncNow() async throws -> SyncAppSnapshot {
         guard snapshot.connection.isConnected else {
             throw SyncAppCoordinatorError.notConnected
@@ -114,6 +131,7 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
     case noListsSelected
     case conflictNotFound
     case invalidSelection
+    case localChangesUnsupported
     case providerUnavailable(String)
     case oauthNotConfigured(SyncProviderChoice?)
     case oauthCallbackInvalid
@@ -124,6 +142,7 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
         case .noListsSelected: return "Choose at least one list before starting a sync."
         case .conflictNotFound: return "That conflict is no longer available."
         case .invalidSelection: return "One or more selected lists are no longer available."
+        case .localChangesUnsupported: return "This sync coordinator does not accept local task or list changes."
         case .providerUnavailable(let provider): return "The provider is not available in this app runtime: \(provider)."
         case .oauthNotConfigured(let provider):
             return provider.map { "OAuth is not configured for \($0.title) in this app target." } ?? "The OAuth callback is no longer valid."

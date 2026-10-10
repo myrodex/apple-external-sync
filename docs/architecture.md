@@ -49,3 +49,9 @@ The package graph should remain acyclic: canonical/domain modules do not import 
 - Use adapter transport fakes to test auth failures, rate limits, malformed responses, conditional-write failures, and retry safety.
 - Validate every JSON Schema and lint the OpenAPI document in CI. Contract fixtures should include field-loss warnings, conflicts, cursor expiry, and idempotency mismatch.
 - Keep relay tests stateless: health/readiness and structured not-configured responses are testable without a database or provider account.
+
+## Apple platform lifecycle
+
+`EventKitRemindersAdapter` emits a complete provider snapshot only when its selection policy is `AllEventKitListsSelection`. Explicit or mutable list selection is a partial snapshot, so omitted lists are not interpreted as remote deletions. `SelectedListsSyncAdapter` also preserves global provider cursors when a pull contains deferred, unselected changes.
+
+On iOS, `AppleSyncLifecycle` owns `BGTaskScheduler` registration/rescheduling policy and propagates the actual sync result to the task completion callback. On macOS, the app uses `SMAppService.mainApp` by default: login-item behavior is intentionally visible and status/approval/System Settings controls are exposed by the app shell. An optional `ExternalSyncLoginItemBundleIdentifier` changes the target to a separately packaged helper under `Contents/Library/LoginItems`.

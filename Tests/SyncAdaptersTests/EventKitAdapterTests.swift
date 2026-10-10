@@ -29,7 +29,7 @@ final class EventKitAdapterTests: XCTestCase {
         )
 
         let changes = try await adapter.pullChanges(since: "ignored")
-        XCTAssertTrue(changes.isFullSnapshot)
+        XCTAssertFalse(changes.isFullSnapshot, "An explicit list selection is a partial snapshot; unselected lists must not be inferred as deletes.")
         XCTAssertNil(changes.nextCursor)
         XCTAssertEqual(changes.serverNow, Date(timeIntervalSince1970: 30))
         XCTAssertEqual(changes.changes.count, 2)
@@ -48,6 +48,23 @@ final class EventKitAdapterTests: XCTestCase {
         XCTAssertEqual(taskIDs, ["task-1"])
         let fetchedIDs = await store.lastFetchedListIDs()
         XCTAssertEqual(fetchedIDs, ["work"])
+    }
+
+    func testAllListSelectionStillEmitsACompleteSnapshot() async throws {
+        let store = FakeEventKitStore(
+            status: .fullAccess,
+            lists: [EventKitReminderListSnapshot(id: "work", name: "Work")]
+        )
+        let adapter = EventKitRemindersAdapter(
+            account: SyncAccount(provider: .eventKit, accountID: "local"),
+            store: store,
+            selection: AllEventKitListsSelection(),
+            mapping: InMemoryEventKitListMapping(),
+            changeSource: FinishedChangeSource()
+        )
+
+        let changes = try await adapter.pullChanges(since: nil)
+        XCTAssertTrue(changes.isFullSnapshot)
     }
 
     func testPullRequiresReadableAccessAndRequestAccessUpdatesFakeStatus() async throws {

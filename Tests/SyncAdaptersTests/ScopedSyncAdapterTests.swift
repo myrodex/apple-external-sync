@@ -21,9 +21,10 @@ final class ScopedSyncAdapterTests: XCTestCase {
         let scope = SelectedListScope(selectedRemoteListIDs: ["work"])
         let adapter = SelectedListsSyncAdapter(base: base, scope: scope)
 
-        let result = try await adapter.pullChanges(since: nil)
+        let result = try await adapter.pullChanges(since: "cursor-before")
 
         XCTAssertFalse(result.isFullSnapshot)
+        XCTAssertEqual(result.nextCursor, "cursor-before", "A global cursor cannot advance past unselected changes.")
         XCTAssertEqual(result.changes.count, 2)
         XCTAssertFalse(result.changes.contains { change in
             switch change {
@@ -33,7 +34,7 @@ final class ScopedSyncAdapterTests: XCTestCase {
         })
     }
 
-    func testPushRejectsOutOfScopeMutationsSoEngineRetainsThemForLater() async throws {
+    func testPushDefersOutOfScopeMutationsSoEngineRetainsThemForLater() async throws {
         let account = SyncAccount(provider: .googleTasks, accountID: "account")
         let base = ScopedFakeAdapter(account: account, changes: RemoteChanges(changes: [], nextCursor: nil, serverNow: Date()))
         let adapter = SelectedListsSyncAdapter(base: base, scope: SelectedListScope(selectedRemoteListIDs: ["work"]))

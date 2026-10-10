@@ -46,12 +46,21 @@ public struct SelectedListsSyncAdapter: ExternalSyncAdapter, FieldDiagnosticsPro
             case .task(let task): return task.remoteListID.map(selected.contains) ?? false
             }
         }
+        let hasDeferredChanges = changes.count != pulled.changes.count
+        let selectedIDs = selected
+        let diagnostics = pulled.diagnostics.filter { diagnostic in
+            guard let resourceID = diagnostic.resourceID else { return true }
+            return selectedIDs.contains(resourceID)
+        }
         return RemoteChanges(
             changes: changes,
-            nextCursor: pulled.nextCursor,
+            // Provider cursors are global, opaque checkpoints. Do not consume one
+            // while an unselected list has changes: on a later selection the base
+            // adapter must replay those changes instead of skipping them forever.
+            nextCursor: hasDeferredChanges ? cursor : pulled.nextCursor,
             serverNow: pulled.serverNow,
             isFullSnapshot: false,
-            diagnostics: pulled.diagnostics
+            diagnostics: diagnostics
         )
     }
 
@@ -65,9 +74,17 @@ public struct SelectedListsSyncAdapter: ExternalSyncAdapter, FieldDiagnosticsPro
             case .deleteTask(_, _, let remoteListID, _): return remoteListID.map(selected.contains) ?? false
             }
         }
-        let acceptedScope = Set(filtered)
-        let outsideScope = mutations.filter { !acceptedScope.contains($0) }.map {
-            RejectedMutation(mutation: $0, reason: "The mutation targets a list that is not selected for synchronization.", retryable: false)
+        // Keep out-of-scope mutations as explicit rejections. SyncEngine uses the
+        // rejection set to avoid advancing their replicas/baselines, which is what
+        // defers the local edit until the user selects that list again. Silently
+        // dropping them would make the engine mark them as accepted and lose the
+        // mutation from the retry path.
+        let outsideScope = mutations.filter { !filtered.contains($0) }.map {
+            RejectedMutation(
+                mutation: $0,
+                reason: "The mutation targets a list that is not selected for synchronization.",
+                retryable: false
+            )
         }
         guard !filtered.isEmpty else {
             return PushResult(accepted: 0, rejected: outsideScope, nextCursor: cursor, serverNow: Date(), diagnostics: [])

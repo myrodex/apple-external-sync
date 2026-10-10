@@ -105,11 +105,29 @@ final class SyncAppViewModelTests: XCTestCase {
         XCTAssertTrue(model.automaticSyncSupported)
         XCTAssertTrue(model.automaticSyncRequiresApproval)
         XCTAssertFalse(model.automaticSyncEnabled)
+        XCTAssertEqual(model.automaticSyncTarget, .bundledHelper)
 
         model.openAutomaticSyncSettings()
 
         XCTAssertTrue(manager.openedSettings)
     }
+
+#if os(macOS)
+    func testMacOSLoginItemDefaultsToExplicitMainApplicationTarget() {
+        let manager = MacOSLoginItemManager()
+
+        XCTAssertTrue(manager.isSupported)
+        XCTAssertEqual(manager.target, .mainApplication)
+        XCTAssertFalse(manager.requiresApproval && manager.isEnabled)
+    }
+
+    func testMacOSLoginItemCanTargetBundledHelper() {
+        let manager = MacOSLoginItemManager(helperBundleIdentifier: "com.example.ExternalSyncHelper")
+
+        XCTAssertTrue(manager.isSupported)
+        XCTAssertEqual(manager.target, .bundledHelper)
+    }
+#endif
 
     func testLoginItemFailureDoesNotChangeReportedState() {
         let manager = FailingLoginItemManager()
@@ -144,6 +162,7 @@ private final class FailingLoginItemManager: LoginItemManaging {
 private final class ApprovalLoginItemManager: LoginItemManaging {
     let isSupported = true
     let requiresApproval = true
+    let target: LoginItemTarget = .bundledHelper
     private(set) var isEnabled = false
     private(set) var openedSettings = false
 

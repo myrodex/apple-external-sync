@@ -22,6 +22,7 @@ public final class SyncAppViewModel: ObservableObject {
     @Published public private(set) var automaticSyncEnabled: Bool
     @Published public private(set) var automaticSyncRequiresApproval: Bool
     @Published public private(set) var automaticSyncSupported: Bool
+    @Published public private(set) var automaticSyncTarget: LoginItemTarget
 
     private let coordinator: any SyncAppCoordinator
     private let loginItemManager: any LoginItemManaging
@@ -39,6 +40,7 @@ public final class SyncAppViewModel: ObservableObject {
         self.automaticSyncEnabled = loginItemManager.isEnabled
         self.automaticSyncRequiresApproval = loginItemManager.requiresApproval
         self.automaticSyncSupported = loginItemManager.isSupported
+        self.automaticSyncTarget = loginItemManager.target
     }
 
     deinit {
@@ -169,10 +171,12 @@ public final class SyncAppViewModel: ObservableObject {
             try loginItemManager.setEnabled(enabled)
             automaticSyncEnabled = loginItemManager.isEnabled
             automaticSyncRequiresApproval = loginItemManager.requiresApproval
+            automaticSyncTarget = loginItemManager.target
         } catch {
             loginItemError = error.localizedDescription
             automaticSyncEnabled = loginItemManager.isEnabled
             automaticSyncRequiresApproval = loginItemManager.requiresApproval
+            automaticSyncTarget = loginItemManager.target
         }
     }
 
@@ -180,6 +184,7 @@ public final class SyncAppViewModel: ObservableObject {
         automaticSyncEnabled = loginItemManager.isEnabled
         automaticSyncRequiresApproval = loginItemManager.requiresApproval
         automaticSyncSupported = loginItemManager.isSupported
+        automaticSyncTarget = loginItemManager.target
     }
 
     public func openAutomaticSyncSettings() {

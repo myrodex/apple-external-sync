@@ -163,6 +163,39 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     }
 }
 
+/// App-owned generic REST credentials/configuration. The JSON form contains no
+/// bearer token; the token is resolved from the Keychain service/access-group below.
+public struct GenericRESTConnectionSettings: Codable, Hashable, Sendable {
+    public let accountID: String
+    public let keychainService: String
+    public let keychainAccessGroup: String?
+    public let configuration: GenericRESTConfiguration
+
+    public init(
+        accountID: String,
+        keychainService: String = "dev.myrodex.external-sync.oauth",
+        keychainAccessGroup: String? = nil,
+        configuration: GenericRESTConfiguration
+    ) {
+        self.accountID = accountID
+        self.keychainService = keychainService
+        self.keychainAccessGroup = keychainAccessGroup
+        self.configuration = configuration
+    }
+
+    public init(jsonData: Data, requireHTTPS: Bool = true) throws {
+        do {
+            self = try JSONDecoder().decode(Self.self, from: jsonData)
+        } catch {
+            throw GenericRESTConfigurationError.invalidJSON(error.localizedDescription)
+        }
+        guard !accountID.isEmpty, !keychainService.isEmpty else {
+            throw GenericRESTConfigurationError.invalidJSON("accountID and keychainService are required.")
+        }
+        try configuration.validate(requireHTTPS: requireHTTPS)
+    }
+}
+
 /// Generic REST connection for a pre-provisioned, refresh-aware bearer-token closure.
 /// OAuth-capable custom services can use DeviceOAuthConnectionFactory with a
 /// GenericRESTAdapter as its adapter builder.
@@ -186,6 +219,19 @@ public struct GenericRESTConnectionFactory: SyncProviderConnectionFactory {
         self.configuration = configuration
         self.transport = transport
         self.tokenProvider = accessToken
+    }
+
+    public init(
+        settings: GenericRESTConnectionSettings,
+        transport: any HTTPTransport = URLSessionHTTPTransport()
+    ) {
+        let tokenStore = KeychainOAuthTokenStore(service: settings.keychainService, accessGroup: settings.keychainAccessGroup)
+        self.init(accountID: settings.accountID, configuration: settings.configuration, transport: transport) {
+            guard let token = try await tokenStore.token(for: SyncAccount(provider: .genericREST, accountID: settings.accountID)) else {
+                throw SyncAdapterError.authenticationRequired
+            }
+            return token.accessToken
+        }
     }
 
     public func beginOAuthAuthorization() throws -> OAuthAuthorizationRequest {

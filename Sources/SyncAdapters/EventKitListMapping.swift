@@ -7,11 +7,23 @@ import SyncContracts
 /// change without rebuilding the adapter.
 public protocol EventKitListSelection: Sendable {
     func includes(_ list: EventKitReminderListSnapshot) async -> Bool
+
+    /// Whether an emitted EventKit pull represents the entire provider collection.
+    /// Explicit selection scopes are partial by definition: omitted lists must not be
+    /// interpreted by SyncEngine as remote deletions.
+    func isCompleteSnapshot() async -> Bool
+}
+
+public extension EventKitListSelection {
+    /// Custom selection policies default to a partial snapshot. A policy must opt into
+    /// full-snapshot deletion inference explicitly through `AllEventKitListsSelection`.
+    func isCompleteSnapshot() async -> Bool { false }
 }
 
 public struct AllEventKitListsSelection: EventKitListSelection {
     public init() {}
     public func includes(_ list: EventKitReminderListSnapshot) async -> Bool { true }
+    public func isCompleteSnapshot() async -> Bool { true }
 }
 
 /// Explicit identifier selection. It intentionally does not match by name: names are
@@ -26,6 +38,8 @@ public struct ExplicitEventKitListSelection: EventKitListSelection {
     public func includes(_ list: EventKitReminderListSnapshot) async -> Bool {
         selectedListIDs.contains(list.id)
     }
+
+    public func isCompleteSnapshot() async -> Bool { false }
 }
 
 /// Maps canonical list IDs to EventKit calendar identifiers. A mapping is required
@@ -74,6 +88,8 @@ public actor MutableEventKitListSelection: EventKitListSelection {
     public func includes(_ list: EventKitReminderListSnapshot) async -> Bool {
         selectedListIDs.contains(list.id)
     }
+
+    public func isCompleteSnapshot() async -> Bool { false }
 
     public func replace(with listIDs: Set<String>) {
         selectedListIDs = listIDs

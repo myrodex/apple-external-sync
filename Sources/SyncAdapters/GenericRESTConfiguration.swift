@@ -12,6 +12,16 @@ public struct RESTJSONPath: RawRepresentable, Codable, Hashable, Sendable, Expre
     public init(stringLiteral value: StringLiteralType) { self.rawValue = value }
     public var description: String { rawValue }
     var components: [String] { rawValue.split(separator: ".", omittingEmptySubsequences: true).map(String.init) }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.rawValue = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum RESTPaginationMode: String, Codable, Hashable, Sendable {
@@ -54,6 +64,38 @@ public struct RESTPaginationDescriptor: Codable, Hashable, Sendable {
         self.pageSizeQueryName = pageSizeQueryName
         self.pageSize = max(1, pageSize)
         self.maxPages = max(1, maxPages)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, itemsPath, nextCursorPath, nextLinkPath, cursorQueryName, pageQueryName, pageSizeQueryName, pageSize, maxPages
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            mode: try container.decodeIfPresent(RESTPaginationMode.self, forKey: .mode) ?? .none,
+            itemsPath: try container.decodeIfPresent(RESTJSONPath.self, forKey: .itemsPath) ?? "items",
+            nextCursorPath: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .nextCursorPath) ?? "nextCursor",
+            nextLinkPath: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .nextLinkPath) ?? "nextLink",
+            cursorQueryName: try container.decodeIfPresent(String.self, forKey: .cursorQueryName) ?? "cursor",
+            pageQueryName: try container.decodeIfPresent(String.self, forKey: .pageQueryName) ?? "page",
+            pageSizeQueryName: try container.decodeIfPresent(String?.self, forKey: .pageSizeQueryName) ?? "limit",
+            pageSize: try container.decodeIfPresent(Int.self, forKey: .pageSize) ?? 100,
+            maxPages: try container.decodeIfPresent(Int.self, forKey: .maxPages) ?? 10_000
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(itemsPath, forKey: .itemsPath)
+        try container.encodeIfPresent(nextCursorPath, forKey: .nextCursorPath)
+        try container.encodeIfPresent(nextLinkPath, forKey: .nextLinkPath)
+        try container.encode(cursorQueryName, forKey: .cursorQueryName)
+        try container.encode(pageQueryName, forKey: .pageQueryName)
+        try container.encodeIfPresent(pageSizeQueryName, forKey: .pageSizeQueryName)
+        try container.encode(pageSize, forKey: .pageSize)
+        try container.encode(maxPages, forKey: .maxPages)
     }
 
     public static let none = RESTPaginationDescriptor(mode: .none, itemsPath: "items", nextCursorPath: nil, nextLinkPath: nil)
@@ -108,6 +150,29 @@ public struct RESTFieldMap: Codable, Hashable, Sendable {
     }
 
     public static let standard = RESTFieldMap()
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, notes, listID, completed, dueDate, completedAt, priority, color, position, deleted, updatedAt, revision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(RESTJSONPath.self, forKey: .id) ?? "id",
+            title: try container.decodeIfPresent(RESTJSONPath.self, forKey: .title) ?? "title",
+            notes: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .notes) ?? "notes",
+            listID: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .listID) ?? "listId",
+            completed: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .completed) ?? "completed",
+            dueDate: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .dueDate) ?? "dueDate",
+            completedAt: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .completedAt) ?? "completedAt",
+            priority: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .priority) ?? "priority",
+            color: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .color) ?? "color",
+            position: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .position) ?? "position",
+            deleted: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .deleted) ?? "deleted",
+            updatedAt: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .updatedAt) ?? "updatedAt",
+            revision: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .revision) ?? "revision"
+        )
+    }
 }
 
 public struct RESTCollectionDescriptor: Codable, Hashable, Sendable {
@@ -119,6 +184,17 @@ public struct RESTCollectionDescriptor: Codable, Hashable, Sendable {
         self.path = path
         self.fields = fields
         self.pagination = pagination
+    }
+
+    private enum CodingKeys: String, CodingKey { case path, fields, pagination }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            path: try container.decode(String.self, forKey: .path),
+            fields: try container.decodeIfPresent(RESTFieldMap.self, forKey: .fields) ?? .standard,
+            pagination: try container.decodeIfPresent(RESTPaginationDescriptor.self, forKey: .pagination) ?? .none
+        )
     }
 }
 
@@ -171,6 +247,20 @@ public struct RESTMutationEndpoint: Codable, Hashable, Sendable {
         self.deleteMethod = deleteMethod
     }
 
+    private enum CodingKeys: String, CodingKey { case createPath, updatePath, deletePath, createMethod, updateMethod, deleteMethod }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            createPath: try container.decodeIfPresent(String.self, forKey: .createPath),
+            updatePath: try container.decodeIfPresent(String.self, forKey: .updatePath),
+            deletePath: try container.decodeIfPresent(String.self, forKey: .deletePath),
+            createMethod: try container.decodeIfPresent(String.self, forKey: .createMethod) ?? "POST",
+            updateMethod: try container.decodeIfPresent(String.self, forKey: .updateMethod) ?? "PATCH",
+            deleteMethod: try container.decodeIfPresent(String.self, forKey: .deleteMethod) ?? "DELETE"
+        )
+    }
+
     public static let none = RESTMutationEndpoint()
 }
 
@@ -200,8 +290,79 @@ public struct GenericRESTConfiguration: Codable, Hashable, Sendable {
         self.taskMutations = taskMutations
         self.fieldCapabilities = fieldCapabilities
     }
+
+    private enum CodingKeys: String, CodingKey { case baseURL, lists, tasks, changes, listMutations, taskMutations, fieldCapabilities }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            baseURL: try container.decode(URL.self, forKey: .baseURL),
+            lists: try container.decode(RESTCollectionDescriptor.self, forKey: .lists),
+            tasks: try container.decode(RESTCollectionDescriptor.self, forKey: .tasks),
+            changes: try container.decodeIfPresent(RESTChangesDescriptor.self, forKey: .changes),
+            listMutations: try container.decodeIfPresent(RESTMutationEndpoint.self, forKey: .listMutations) ?? .none,
+            taskMutations: try container.decodeIfPresent(RESTMutationEndpoint.self, forKey: .taskMutations) ?? .none,
+            fieldCapabilities: try container.decodeIfPresent(AdapterFieldCapabilities.self, forKey: .fieldCapabilities) ?? .allNative
+        )
+    }
 }
 
 public extension AdapterFieldCapabilities {
     static let allNative = AdapterFieldCapabilities(fields: Dictionary(uniqueKeysWithValues: AdapterField.allCases.map { ($0, .native) }))
+}
+
+public enum GenericRESTConfigurationError: Error, LocalizedError, Equatable, Sendable {
+    case invalidJSON(String)
+    case insecureBaseURL
+    case missingEndpointPath(String)
+    case unsupportedHTTPMethod(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidJSON(let message): return "Invalid generic REST configuration: \(message)"
+        case .insecureBaseURL: return "Generic REST integrations must use an HTTPS base URL."
+        case .missingEndpointPath(let endpoint): return "Generic REST endpoint path is missing: \(endpoint)."
+        case .unsupportedHTTPMethod(let method): return "Unsupported generic REST mutation method: \(method)."
+        }
+    }
+}
+
+public extension GenericRESTConfiguration {
+    /// Decodes a complete declarative provider configuration and validates the safety
+    /// invariants required by the app runtime. Tokens are intentionally not part of this
+    /// payload; they are loaded from Keychain by the app connection factory.
+    init(jsonData: Data, requireHTTPS: Bool = true) throws {
+        do {
+            self = try JSONDecoder().decode(Self.self, from: jsonData)
+        } catch {
+            throw GenericRESTConfigurationError.invalidJSON(error.localizedDescription)
+        }
+        try validate(requireHTTPS: requireHTTPS)
+    }
+
+    func validate(requireHTTPS: Bool = true) throws {
+        guard baseURL.host != nil else { throw GenericRESTConfigurationError.invalidJSON("baseURL must include a host.") }
+        if requireHTTPS && baseURL.scheme?.lowercased() != "https" {
+            throw GenericRESTConfigurationError.insecureBaseURL
+        }
+        try validateCollection(lists, label: "lists")
+        try validateCollection(tasks, label: "tasks")
+        try validateMutation(listMutations, label: "listMutations")
+        try validateMutation(taskMutations, label: "taskMutations")
+        if let changes {
+            guard !changes.path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath("changes") }
+        }
+    }
+
+    private func validateCollection(_ collection: RESTCollectionDescriptor, label: String) throws {
+        guard !collection.path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath(label) }
+    }
+
+    private func validateMutation(_ endpoint: RESTMutationEndpoint, label: String) throws {
+        let methods = [endpoint.createMethod, endpoint.updateMethod, endpoint.deleteMethod]
+        for method in methods where !["POST", "PUT", "PATCH", "DELETE"].contains(method.uppercased()) {
+            throw GenericRESTConfigurationError.unsupportedHTTPMethod(method)
+        }
+        if endpoint.createPath == nil && endpoint.updatePath == nil && endpoint.deletePath == nil { return }
+    }
 }

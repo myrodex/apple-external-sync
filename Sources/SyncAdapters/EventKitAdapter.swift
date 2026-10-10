@@ -4,10 +4,13 @@ import SyncContracts
 
 /// EventKit Reminders adapter.
 ///
-/// EventKit has no server-side change cursor. `pullChanges` therefore performs a
-/// complete refetch of the selected calendars and returns a deterministic snapshot.
-/// The adapter's `events()` stream coalesces `EKEventStoreChanged` notifications and
-/// is the integration hook for triggering another pull in the sync engine.
+/// EventKit has no server-side change cursor. `pullChanges` therefore refetches the
+/// selected calendars and returns a deterministic snapshot. A selection policy can
+/// mark that snapshot as complete only when it covers the entire provider; explicit
+/// list selection is intentionally partial so SyncEngine never infers unselected
+/// calendars were deleted. The adapter's `events()` stream coalesces
+/// `EKEventStoreChanged` notifications and is the integration hook for triggering
+/// another pull in the sync engine.
 public actor EventKitRemindersAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding {
     public nonisolated let account: SyncAccount
     public nonisolated let capabilities: Set<AdapterCapability> = [
@@ -69,6 +72,7 @@ public actor EventKitRemindersAdapter: ExternalSyncAdapter, FieldDiagnosticsProv
             ))
         }
         let selectedIDs = Set(lists.map(\.id))
+        let isCompleteSnapshot = await selection.isCompleteSnapshot()
         let taskChanges = reminders
             .filter { selectedIDs.contains($0.listID) }
             .map { reminder in
@@ -100,7 +104,7 @@ public actor EventKitRemindersAdapter: ExternalSyncAdapter, FieldDiagnosticsProv
             changes: listChanges + taskChanges,
             nextCursor: nil,
             serverNow: now(),
-            isFullSnapshot: true,
+            isFullSnapshot: isCompleteSnapshot,
             diagnostics: diagnostics
         )
     }
