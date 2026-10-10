@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from urllib.parse import urljoin
 
 try:
-    from jsonschema import Draft202012Validator, FormatChecker, RefResolver
+    from jsonschema import Draft202012Validator, FormatChecker
+    from referencing import Registry, Resource
 except ImportError as exc:  # pragma: no cover - exercised only without dev deps
     print(
         "Missing validator dependencies. Run: "
@@ -44,22 +44,27 @@ def load_json(path: Path) -> object:
         return json.load(handle)
 
 
-def schema_store() -> dict[str, object]:
+def schema_registry() -> Registry:
     """Make local filename references resolve without network access."""
-    store: dict[str, object] = {}
-    for path in SCHEMAS.glob("*.schema.json"):
-        schema = load_json(path)
-        file_uri = path.as_uri()
-        store[file_uri] = schema
-        store[path.name] = schema
-        store[urljoin(file_uri, path.name)] = schema
-    return store
+    registry = Registry()
+    for schema_path in SCHEMAS.glob("*.schema.json"):
+        schema = load_json(schema_path)
+        # The checked-in documents deliberately use portable relative refs. Give
+        # each in-memory copy a file URI base so modern referencing can resolve
+        # those refs without fetching from the network.
+        schema["$id"] = schema_path.resolve().as_uri()
+        registry = registry.with_resource(schema["$id"], Resource.from_contents(schema))
+    return registry
 
 
 def validator_for(path: Path) -> Draft202012Validator:
     schema = load_json(path)
-    resolver = RefResolver(path.as_uri(), schema, store=schema_store())
-    return Draft202012Validator(schema, resolver=resolver, format_checker=FormatChecker())
+    schema["$id"] = path.resolve().as_uri()
+    return Draft202012Validator(
+        schema,
+        registry=schema_registry(),
+        format_checker=FormatChecker(),
+    )
 
 
 def validate(name: str, instance: object, schema_path: Path) -> None:
