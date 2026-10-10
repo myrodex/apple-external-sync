@@ -39,6 +39,11 @@ class ProtocolSchemaTests(unittest.TestCase):
         validator = validate_protocol.validator_for(ROOT / "schemas/task.schema.json")
         self.assertTrue(list(validator.iter_errors(invalid)))
 
+    def test_task_create_defaults_to_open_when_status_is_omitted(self) -> None:
+        task = {"listId": "list_home", "title": "Buy milk"}
+        validator = validate_protocol.validator_for(ROOT / "schemas/task-input.schema.json")
+        self.assertEqual(list(validator.iter_errors(task)), [])
+
     def test_update_requires_a_compare_and_swap_precondition(self) -> None:
         operation = {
             "operationId": "update_1",

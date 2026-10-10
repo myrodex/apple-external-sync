@@ -24,7 +24,7 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "status": { "const": "completed" } } },
+      "if": { "properties": { "status": { "const": "completed" } }, "required": ["status"] },
       "then": { "required": ["completedAt"], "properties": { "completedAt": { "type": "string" } } }
     }
   ]
