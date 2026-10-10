@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Change feed entry",
+  "description": "A change is either a current list/task resource or a soft-delete tombstone. Changes are ordered by the opaque server cursor and are safe to replay.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "cursor", "occurredAt", "resource"],
+      "properties": {
+        "kind": { "const": "upsert" },
+        "cursor": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "resource": {
+          "oneOf": [
+            { "$ref": "list.schema.json" },
+            { "$ref": "task.schema.json" }
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "warning.schema.json" },
+          "maxItems": 64
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "cursor", "occurredAt", "tombstone"],
+      "properties": {
+        "kind": { "const": "delete" },
+        "cursor": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "tombstone": { "$ref": "tombstone.schema.json" },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "warning.schema.json" },
+          "maxItems": 64
+        }
+      }
+    }
+  ]
+}

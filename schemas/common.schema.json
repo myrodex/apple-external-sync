@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reminders sync common definitions",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "providerName": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9._-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "etag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\"[^\"]+\"$"
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$"
+    },
+    "providerRef": {
+      "$ref": "provider-ref.schema.json"
+    },
+    "warning": {
+      "$ref": "warning.schema.json"
+    },
+    "pageSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "resourceType": {
+      "type": "string",
+      "enum": ["list", "task"]
+    },
+    "isoDurationSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 315360000
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sync capabilities",
+  "description": "The server and provider capability contract. Capabilities describe support and limits; clients must negotiate before sending provider-specific fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "providers", "resources", "limits", "auth", "retention"],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "provider-capability.schema.json" }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lists", "tasks", "changes", "mutations"],
+      "properties": {
+        "lists": { "$ref": "resource-capability.schema.json" },
+        "tasks": { "$ref": "resource-capability.schema.json" },
+        "changes": { "$ref": "changes-capability.schema.json" },
+        "mutations": { "$ref": "mutations-capability.schema.json" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxPageSize", "maxBatchOperations", "maxPayloadBytes"],
+      "properties": {
+        "maxPageSize": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "maxBatchOperations": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxPayloadBytes": { "type": "integer", "minimum": 1024, "maximum": 104857600 }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemes", "requiredScopes"],
+      "properties": {
+        "schemes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["bearer", "mTLS"] }
+        },
+        "requiredScopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9._:-]*$" }
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tombstoneDays", "minimumTombstoneDays"],
+      "properties": {
+        "tombstoneDays": { "type": "integer", "minimum": 30 },
+        "minimumTombstoneDays": { "type": "integer", "const": 30 }
+      }
+    }
+  }
+}

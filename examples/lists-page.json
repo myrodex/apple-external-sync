@@ -1,0 +1,30 @@
+{
+  "items": [
+    {
+      "id": "list_home",
+      "name": "Home",
+      "isDefault": true,
+      "position": "a0",
+      "color": "#4F8EF7",
+      "symbol": "house",
+      "providerRefs": [
+        {
+          "provider": "apple-reminders",
+          "accountId": "icloud:user-opaque",
+          "resourceType": "list",
+          "resourceId": "x-apple-reminders-list-opaque",
+          "url": "x-apple-reminders://list/x-apple-reminders-list-opaque",
+          "etag": "provider-etag-17",
+          "observedAt": "2026-10-10T10:00:00Z"
+        }
+      ],
+      "createdAt": "2026-01-15T08:00:00Z",
+      "updatedAt": "2026-10-10T10:00:00Z",
+      "revision": 17,
+      "etag": "\"list_home-17\""
+    }
+  ],
+  "nextCursor": "snapshot-list-cursor-2",
+  "hasMore": false,
+  "serverTime": "2026-10-10T10:00:01Z"
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sync warning",
+  "description": "A non-fatal condition that clients must surface or record. `field_loss` means that a source field could not be represented exactly by the target provider.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "severity", "message"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": ["field_loss", "field_transformed", "truncated", "unsupported", "default_applied"]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warning"]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "resourceType": {
+      "type": ["string", "null"],
+      "enum": ["list", "task", null]
+    },
+    "resourceId": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "field": {
+      "type": ["string", "null"],
+      "maxLength": 256
+    },
+    "sourceProvider": {
+      "type": ["string", "null"],
+      "maxLength": 64
+    },
+    "targetProvider": {
+      "type": ["string", "null"],
+      "maxLength": 64
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

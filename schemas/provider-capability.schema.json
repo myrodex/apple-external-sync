@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Provider capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "displayName", "accountLinking", "supportedFields", "limits"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9._-]*$"
+    },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "accountLinking": {
+      "type": "string",
+      "enum": ["oauth2", "device_code", "none"]
+    },
+    "supportedFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["list", "task"],
+      "properties": {
+        "list": { "$ref": "field-capability-map.schema.json" },
+        "task": { "$ref": "field-capability-map.schema.json" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxTitleLength", "maxNotesLength", "maxTags", "maxAlerts"],
+      "properties": {
+        "maxTitleLength": { "type": "integer", "minimum": 1 },
+        "maxNotesLength": { "type": "integer", "minimum": 0 },
+        "maxTags": { "type": "integer", "minimum": 0 },
+        "maxAlerts": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "documentationUrl": { "type": ["string", "null"], "format": "uri" }
+  }
+}

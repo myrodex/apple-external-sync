@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mutation capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["supportsBatch", "supportsDryRun", "maxBatchOperations"],
+  "properties": {
+    "supportsBatch": { "type": "boolean" },
+    "supportsDryRun": { "type": "boolean" },
+    "maxBatchOperations": { "type": "integer", "minimum": 1, "maximum": 1000 }
+  }
+}

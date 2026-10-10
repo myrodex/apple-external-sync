@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reminder alert",
+  "description": "An alert attached to a reminder. An alert has either an absolute time or a relative offset from dueAt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "kind": { "type": "string", "enum": ["absolute", "relative"] },
+    "at": { "type": ["string", "null"], "format": "date-time" },
+    "offsetSeconds": {
+      "type": ["integer", "null"],
+      "minimum": -315360000,
+      "maximum": 315360000
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "absolute" } } },
+      "then": { "required": ["at"], "properties": { "at": { "type": "string" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "relative" } } },
+      "then": { "required": ["offsetSeconds"], "properties": { "offsetSeconds": { "type": "integer" } } }
+    }
+  ]
+}

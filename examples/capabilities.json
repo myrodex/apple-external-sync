@@ -1,0 +1,83 @@
+{
+  "protocolVersion": "1.0",
+  "providers": [
+    {
+      "provider": "apple-reminders",
+      "displayName": "Apple Reminders",
+      "accountLinking": "none",
+      "supportedFields": {
+        "list": {
+          "name": "native",
+          "isDefault": "native",
+          "position": "transformed",
+          "color": "native",
+          "symbol": "native"
+        },
+        "task": {
+          "title": "native",
+          "notes": "native",
+          "status": "transformed",
+          "priority": "transformed",
+          "dueAt": "native",
+          "startAt": "native",
+          "timeZone": "transformed",
+          "durationSeconds": "unsupported",
+          "url": "native",
+          "locationTrigger": "native",
+          "recurrence": "transformed",
+          "alerts": "native",
+          "tags": "native",
+          "position": "transformed"
+        }
+      },
+      "limits": {
+        "maxTitleLength": 1000,
+        "maxNotesLength": 100000,
+        "maxTags": 128,
+        "maxAlerts": 32
+      },
+      "documentationUrl": "https://support.apple.com/guide/reminders/welcome/mac"
+    }
+  ],
+  "resources": {
+    "lists": {
+      "read": true,
+      "create": true,
+      "update": true,
+      "delete": true,
+      "conditionalWrites": true,
+      "idempotency": true
+    },
+    "tasks": {
+      "read": true,
+      "create": true,
+      "update": true,
+      "delete": true,
+      "conditionalWrites": true,
+      "idempotency": true
+    },
+    "changes": {
+      "supportsCursors": true,
+      "supportsLongPolling": true,
+      "maxPageSize": 500
+    },
+    "mutations": {
+      "supportsBatch": true,
+      "supportsDryRun": true,
+      "maxBatchOperations": 100
+    }
+  },
+  "limits": {
+    "maxPageSize": 500,
+    "maxBatchOperations": 100,
+    "maxPayloadBytes": 10485760
+  },
+  "auth": {
+    "schemes": ["bearer"],
+    "requiredScopes": ["reminders:read", "reminders:write"]
+  },
+  "retention": {
+    "tombstoneDays": 30,
+    "minimumTombstoneDays": 30
+  }
+}

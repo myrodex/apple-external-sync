@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical reminder task",
+  "description": "The provider-neutral reminder model. Fields that a provider cannot represent are preserved by the sync service when possible and reported as field-loss warnings when they are discarded or transformed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "listId", "title", "status", "priority", "providerRefs", "createdAt", "updatedAt", "revision", "etag"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "listId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "maxLength": 100000
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "completed", "cancelled"]
+    },
+    "completedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high"]
+    },
+    "dueAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "startAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "timeZone": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "durationSeconds": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 315360000
+    },
+    "url": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "maxLength": 4096
+    },
+    "locationTrigger": {
+      "oneOf": [
+        { "$ref": "location-trigger.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "recurrence": {
+      "oneOf": [
+        { "$ref": "recurrence.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "alerts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "alert.schema.json" }
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 128,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "position": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Opaque lexicographic ordering key within a list."
+    },
+    "providerRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "provider-ref.schema.json" }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "etag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\"[^\"]+\"$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": { "required": ["completedAt"], "properties": { "completedAt": { "type": "string" } } }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["open", "cancelled"] } } },
+      "then": { "properties": { "completedAt": { "type": ["string", "null"] } } }
+    }
+  ]
+}

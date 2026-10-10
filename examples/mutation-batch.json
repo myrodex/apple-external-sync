@@ -1,0 +1,34 @@
+{
+  "batchId": "batch_01JREMINDERS00000000000001",
+  "operations": [
+    {
+      "operationId": "create_task_1",
+      "op": "create",
+      "resourceType": "task",
+      "clientResourceId": "draft_1",
+      "resource": {
+        "listId": "list_home",
+        "title": "Book dentist",
+        "notes": "Ask about cleaning",
+        "status": "open",
+        "priority": "high",
+        "dueAt": "2026-10-20T15:00:00Z",
+        "timeZone": "Europe/Berlin"
+      }
+    },
+    {
+      "operationId": "update_task_1",
+      "op": "update",
+      "resourceType": "task",
+      "resourceId": "task_buy-milk",
+      "expectedEtag": "\"task_buy-milk-4\"",
+      "fields": {
+        "status": "completed",
+        "completedAt": "2026-10-10T10:03:00Z"
+      },
+      "allowFieldLoss": false
+    }
+  ],
+  "atomic": false,
+  "dryRun": false
+}

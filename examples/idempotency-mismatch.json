@@ -1,0 +1,9 @@
+{
+  "type": "https://myrodex.dev/problems/idempotency-mismatch",
+  "title": "Idempotency key was reused with a different request body",
+  "status": 409,
+  "code": "idempotency_mismatch",
+  "detail": "Use a new Idempotency-Key for a different batch body.",
+  "requestId": "req_01JREMINDERS00000000000002",
+  "instance": "/v1/mutations/requests/req_01JREMINDERS00000000000002"
+}

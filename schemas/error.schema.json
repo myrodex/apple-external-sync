@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sync protocol error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "title", "status", "code", "detail", "requestId"],
+  "properties": {
+    "type": { "type": "string", "format": "uri-reference" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+    "code": {
+      "type": "string",
+      "enum": ["invalid_request", "unauthorized", "forbidden", "not_found", "conflict", "gone", "rate_limited", "provider_unavailable", "unsupported", "idempotency_mismatch", "cursor_expired"]
+    },
+    "detail": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "instance": { "type": "string", "format": "uri-reference" },
+    "retryAfterSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "conflict": { "$ref": "conflict.schema.json" },
+    "warnings": { "type": "array", "items": { "$ref": "warning.schema.json" }, "maxItems": 64 }
+  }
+}

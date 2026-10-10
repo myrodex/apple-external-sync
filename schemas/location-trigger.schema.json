@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reminder location trigger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["arrive", "leave"]
+    },
+    "latitude": {
+      "type": "number",
+      "minimum": -90,
+      "maximum": 90
+    },
+    "longitude": {
+      "type": "number",
+      "minimum": -180,
+      "maximum": 180
+    },
+    "radiusMeters": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100000
+    },
+    "address": {
+      "type": ["string", "null"],
+      "maxLength": 2000
+    },
+    "placeId": {
+      "type": ["string", "null"],
+      "maxLength": 512
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "enum": ["arrive", "leave"] } }
+      },
+      "then": {
+        "required": ["latitude", "longitude", "radiusMeters"]
+      }
+    }
+  ]
+}

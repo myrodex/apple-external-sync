@@ -1,0 +1,99 @@
+{
+  "batchId": "batch_01JREMINDERS00000000000001",
+  "status": "partial",
+  "results": [
+    {
+      "operationId": "create_task_1",
+      "status": "applied",
+      "resource": {
+        "id": "task_dentist",
+        "listId": "list_home",
+        "title": "Book dentist",
+        "notes": "Ask about cleaning",
+        "status": "open",
+        "completedAt": null,
+        "priority": "high",
+        "dueAt": "2026-10-20T15:00:00Z",
+        "startAt": null,
+        "timeZone": "Europe/Berlin",
+        "durationSeconds": null,
+        "url": null,
+        "locationTrigger": null,
+        "recurrence": null,
+        "alerts": [],
+        "tags": [],
+        "position": "a1",
+        "providerRefs": [
+          {
+            "provider": "apple-reminders",
+            "accountId": "icloud:user-opaque",
+            "resourceType": "task",
+            "resourceId": "x-apple-reminders-task-dentist",
+            "parentResourceId": "x-apple-reminders-list-opaque",
+            "url": "x-apple-reminders://task/x-apple-reminders-task-dentist",
+            "etag": "provider-etag-1",
+            "observedAt": "2026-10-10T10:03:00Z"
+          }
+        ],
+        "createdAt": "2026-10-10T10:03:00Z",
+        "updatedAt": "2026-10-10T10:03:00Z",
+        "revision": 1,
+        "etag": "\"task_dentist-1\""
+      }
+    },
+    {
+      "operationId": "update_task_1",
+      "status": "conflict",
+      "conflict": {
+        "code": "conflict",
+        "resourceType": "task",
+        "resourceId": "task_buy-milk",
+        "message": "The task changed after the client read it.",
+        "current": {
+          "id": "task_buy-milk",
+          "listId": "list_home",
+          "title": "Buy oat milk",
+          "notes": "2% oat milk",
+          "status": "open",
+          "completedAt": null,
+          "priority": "medium",
+          "dueAt": "2026-10-11T16:00:00Z",
+          "startAt": null,
+          "timeZone": "Europe/Berlin",
+          "durationSeconds": null,
+          "url": null,
+          "locationTrigger": null,
+          "recurrence": null,
+          "alerts": [],
+          "tags": [
+            "groceries"
+          ],
+          "position": "a0",
+          "providerRefs": [
+            {
+              "provider": "apple-reminders",
+              "accountId": "icloud:user-opaque",
+              "resourceType": "task",
+              "resourceId": "x-apple-reminders-task-opaque",
+              "parentResourceId": "x-apple-reminders-list-opaque",
+              "url": "x-apple-reminders://task/x-apple-reminders-task-opaque",
+              "etag": "provider-etag-5",
+              "observedAt": "2026-10-10T10:04:00Z"
+            }
+          ],
+          "createdAt": "2026-10-09T08:00:00Z",
+          "updatedAt": "2026-10-10T10:04:00Z",
+          "revision": 5,
+          "etag": "\"task_buy-milk-5\""
+        },
+        "conflictingFields": [
+          "status",
+          "completedAt"
+        ],
+        "mergeable": true
+      }
+    }
+  ],
+  "submittedAt": "2026-10-10T10:03:01Z",
+  "completedAt": "2026-10-10T10:03:02Z"
+}

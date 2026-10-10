@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical reminder list",
+  "description": "A provider-neutral reminder list. Deleted lists are represented by tombstones in the changes feed, not by this resource schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "isDefault", "position", "providerRefs", "createdAt", "updatedAt", "revision", "etag"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "isDefault": {
+      "type": "boolean"
+    },
+    "position": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Opaque lexicographic ordering key. Clients must not parse it."
+    },
+    "color": {
+      "type": ["string", "null"],
+      "pattern": "^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$"
+    },
+    "symbol": {
+      "type": ["string", "null"],
+      "maxLength": 64
+    },
+    "providerRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "provider-ref.schema.json" }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "etag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\"[^\"]+\"$"
+    }
+  }
+}

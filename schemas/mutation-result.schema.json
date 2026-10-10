@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mutation operation result",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "status", "resource"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "const": "applied" },
+        "resource": { "oneOf": [{ "$ref": "list.schema.json" }, { "$ref": "task.schema.json" }] },
+        "warnings": { "type": "array", "items": { "$ref": "warning.schema.json" }, "maxItems": 64 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "status", "tombstone"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "const": "deleted" },
+        "tombstone": { "$ref": "tombstone.schema.json" },
+        "warnings": { "type": "array", "items": { "$ref": "warning.schema.json" }, "maxItems": 64 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "status", "error"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "const": "rejected" },
+        "error": { "$ref": "error.schema.json" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "status", "conflict"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "const": "conflict" },
+        "conflict": { "$ref": "conflict.schema.json" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "status", "resource", "warnings"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "const": "dry_run" },
+        "resource": { "oneOf": [{ "$ref": "list.schema.json" }, { "$ref": "task.schema.json" }] },
+        "warnings": { "type": "array", "items": { "$ref": "warning.schema.json" }, "maxItems": 64 }
+      }
+    }
+  ]
+}

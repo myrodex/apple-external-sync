@@ -1,0 +1,76 @@
+{
+  "items": [
+    {
+      "kind": "upsert",
+      "cursor": "changes-cursor-101",
+      "occurredAt": "2026-10-10T10:01:00Z",
+      "resource": {
+        "id": "task_buy-milk",
+        "listId": "list_home",
+        "title": "Buy oat milk",
+        "notes": "2% oat milk",
+        "status": "open",
+        "completedAt": null,
+        "priority": "medium",
+        "dueAt": "2026-10-11T16:00:00Z",
+        "startAt": null,
+        "timeZone": "Europe/Berlin",
+        "durationSeconds": null,
+        "url": null,
+        "locationTrigger": null,
+        "recurrence": null,
+        "alerts": [],
+        "tags": ["groceries"],
+        "position": "a0",
+        "providerRefs": [
+          {
+            "provider": "apple-reminders",
+            "accountId": "icloud:user-opaque",
+            "resourceType": "task",
+            "resourceId": "x-apple-reminders-task-opaque",
+            "parentResourceId": "x-apple-reminders-list-opaque",
+            "url": "x-apple-reminders://task/x-apple-reminders-task-opaque",
+            "etag": "provider-etag-4",
+            "observedAt": "2026-10-10T10:01:00Z"
+          }
+        ],
+        "createdAt": "2026-10-09T08:00:00Z",
+        "updatedAt": "2026-10-10T10:01:00Z",
+        "revision": 4,
+        "etag": "\"task_buy-milk-4\""
+      },
+      "warnings": [
+        {
+          "code": "field_transformed",
+          "severity": "info",
+          "message": "The provider priority was mapped to canonical medium.",
+          "resourceType": "task",
+          "resourceId": "task_buy-milk",
+          "field": "priority",
+          "sourceProvider": "apple-reminders",
+          "targetProvider": null,
+          "details": { "providerValue": "high" }
+        }
+      ]
+    },
+    {
+      "kind": "delete",
+      "cursor": "changes-cursor-102",
+      "occurredAt": "2026-10-10T10:02:00Z",
+      "tombstone": {
+        "resourceType": "task",
+        "resourceId": "task_old",
+        "parentId": "list_home",
+        "deletedAt": "2026-10-10T10:02:00Z",
+        "retentionUntil": "2026-11-09T10:02:00Z",
+        "revision": 9,
+        "etag": "\"task_old-9-deleted\"",
+        "providerRefs": []
+      }
+    }
+  ],
+  "nextCursor": "changes-cursor-102",
+  "hasMore": false,
+  "serverTime": "2026-10-10T10:02:01Z",
+  "tombstoneRetentionDays": 30
+}

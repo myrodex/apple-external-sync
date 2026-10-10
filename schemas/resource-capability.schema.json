@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resource capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["read", "create", "update", "delete", "conditionalWrites", "idempotency"],
+  "properties": {
+    "read": { "type": "boolean" },
+    "create": { "type": "boolean" },
+    "update": { "type": "boolean" },
+    "delete": { "type": "boolean" },
+    "conditionalWrites": { "type": "boolean" },
+    "idempotency": { "type": "boolean" }
+  }
+}

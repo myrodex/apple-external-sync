@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Field capability map",
+  "type": "object",
+  "additionalProperties": {
+    "type": "string",
+    "enum": ["native", "transformed", "unsupported"]
+  }
+}

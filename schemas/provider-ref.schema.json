@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Provider resource reference",
+  "description": "Stable identity and version metadata for the provider resource represented by a canonical sync resource.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "accountId", "resourceType", "resourceId"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9._-]*$",
+      "description": "Lower-case provider namespace, for example `apple-reminders`."
+    },
+    "accountId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Opaque provider account identifier; never interpret its format."
+    },
+    "resourceType": {
+      "type": "string",
+      "enum": ["list", "task"]
+    },
+    "resourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "Opaque identifier assigned by the provider."
+    },
+    "parentResourceId": {
+      "type": ["string", "null"],
+      "maxLength": 512,
+      "description": "Provider parent id (for a task this is normally the provider list id)."
+    },
+    "url": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "etag": {
+      "type": ["string", "null"],
+      "maxLength": 512
+    },
+    "observedAt": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  }
+}

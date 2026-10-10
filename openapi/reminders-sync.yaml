@@ -1,0 +1,602 @@
+openapi: 3.1.0
+info:
+  title: Reminders-first External Sync API
+  version: 1.0.0
+  description: |
+    A provider-neutral, cursor-based sync protocol for reminders lists and tasks.
+
+    The canonical resources are lists and tasks. Providers (Apple Reminders first,
+    followed by other providers) are represented by opaque provider references on
+    each resource. Reads are cursor-paginated and writes are submitted as ordered,
+    idempotent mutation batches. Deletes are soft deletes: the changes feed emits
+    tombstones and retains them for at least 30 days so offline clients can converge.
+
+    Transport requirements, authentication assumptions, conflict handling, and
+    field-loss behavior are normative in `docs/protocol.md`.
+  license:
+    name: Internal protocol specification
+    url: ../docs/protocol.md
+externalDocs:
+  description: Reminders-first sync protocol guide
+  url: ../docs/protocol.md
+servers:
+  - url: https://sync.myrodex.dev
+    description: Production (deployment-specific URL)
+  - url: http://127.0.0.1:8080
+    description: Local development
+x-protocol:
+  protocolVersion: '1.0'
+  transport:
+    protocol: HTTPS
+    minimumTlsVersion: TLSv1.2
+    contentType: application/json
+    errorContentType: application/problem+json
+    compression: gzip
+    maxPayloadBytes: 10485760
+    requestIdHeader: X-Request-Id
+  auth:
+    scheme: Bearer
+    requiredScopes:
+      - reminders:read
+      - reminders:write
+    tokenAudience: sync-api
+  consistency:
+    reads: read-your-writes for the authenticated account after a successful mutation response
+    ordering: changes are strictly ordered by the opaque cursor within one account
+    cursor: opaque and not client-decodable
+    retention: tombstones are retained for at least 30 days
+  idempotency:
+    header: Idempotency-Key
+    requiredOn: POST /v1/mutations
+    replayWindowDays: 30
+    mismatchStatus: 409
+security:
+  - bearerAuth: [reminders:read]
+tags:
+  - name: Discovery
+    description: Capability and provider negotiation.
+  - name: Resources
+    description: Read canonical lists and tasks.
+  - name: Changes
+    description: Incremental cursor-based change feed.
+  - name: Mutations
+    description: Ordered idempotent mutation batches.
+paths:
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Negotiate protocol and provider capabilities
+      tags: [Discovery]
+      security:
+        - bearerAuth: [reminders:read]
+      responses:
+        '200':
+          description: Supported protocol features and provider limits.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+              examples:
+                appleFirst:
+                  externalValue: ../examples/capabilities.json
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/lists:
+    get:
+      operationId: listLists
+      summary: List canonical reminder lists
+      tags: [Resources]
+      security:
+        - bearerAuth: [reminders:read]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of lists. Deleted lists are delivered through the changes feed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPage'
+              examples:
+                page:
+                  externalValue: ../examples/lists-page.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ProviderUnavailable'
+  /v1/lists/{listId}:
+    parameters:
+      - $ref: '#/components/parameters/ListId'
+    get:
+      operationId: getList
+      summary: Get one canonical reminder list
+      tags: [Resources]
+      security:
+        - bearerAuth: [reminders:read]
+      responses:
+        '200':
+          description: The current list.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/List'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: The list was deleted and its tombstone is no longer retained.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/tasks:
+    get:
+      operationId: listTasks
+      summary: List canonical reminder tasks
+      tags: [Resources]
+      security:
+        - bearerAuth: [reminders:read]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: listId
+          in: query
+          description: Restrict the page to a canonical list id.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - name: status
+          in: query
+          description: Optional status filter.
+          schema:
+            type: string
+            enum: [open, completed, cancelled]
+      responses:
+        '200':
+          description: A page of tasks. Deleted tasks are delivered through the changes feed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskPage'
+              examples:
+                page:
+                  externalValue: ../examples/tasks-page.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ProviderUnavailable'
+  /v1/tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      operationId: getTask
+      summary: Get one canonical reminder task
+      tags: [Resources]
+      security:
+        - bearerAuth: [reminders:read]
+      responses:
+        '200':
+          description: The current task.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: The task was deleted and its tombstone is no longer retained.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/changes:
+    get:
+      operationId: getChanges
+      summary: Read incremental changes from an opaque cursor
+      description: |
+        Omit `cursor` only for an initial sync. The response's `nextCursor` is the
+        only cursor a client may persist and send later. A client must process and
+        durably store all returned items before advancing to `nextCursor`. When
+        `hasMore` is false, the client is caught up at the returned cursor.
+
+        A cursor can expire after the server's retention horizon. On `410
+        cursor_expired`, restart with a full list/task snapshot and then request a
+        new changes feed cursor.
+      tags: [Changes]
+      security:
+        - bearerAuth: [reminders:read]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: waitSeconds
+          in: query
+          description: Optional long-poll duration when no changes are available.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 30
+            default: 0
+        - name: resourceType
+          in: query
+          description: Restrict changes to one resource type.
+          schema:
+            type: string
+            enum: [list, task]
+        - name: listId
+          in: query
+          description: Restrict task changes to one list id.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        '200':
+          description: Ordered upserts and tombstones.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangesPage'
+              examples:
+                mixedChanges:
+                  externalValue: ../examples/changes-page.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          $ref: '#/components/responses/CursorExpired'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ProviderUnavailable'
+  /v1/mutations:
+    post:
+      operationId: submitMutationBatch
+      summary: Submit an idempotent mutation batch
+      description: |
+        `Idempotency-Key` and body `batchId` identify a retryable request. The
+        server stores the response for at least 30 days. Repeating a request with
+        the same key and byte-equivalent body returns the original response without
+        reapplying provider writes. Reusing the key with a different body returns
+        `409 idempotency_mismatch`.
+
+        Operations execute in array order. `atomic: false` allows partial success;
+        `atomic: true` requires all operations to validate and commit together or
+        none to commit. Every update/delete must carry `expectedEtag` or
+        `expectedRevision`; stale preconditions produce a conflict result rather
+        than silently overwriting a newer change.
+      tags: [Mutations]
+      security:
+        - bearerAuth: [reminders:write]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RequestIdOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MutationBatchRequest'
+            examples:
+              mixedBatch:
+                externalValue: ../examples/mutation-batch.json
+      responses:
+        '200':
+          description: Batch applied, partially applied, rejected, or dry-run output.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationBatchResponse'
+              examples:
+                result:
+                  externalValue: ../examples/mutation-batch-response.json
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Idempotency mismatch or a batch-level conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                idempotencyMismatch:
+                  externalValue: ../examples/idempotency-mismatch.json
+        '412':
+          description: Conditional write precondition failed before processing any operation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Request exceeds negotiated payload limits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ProviderUnavailable'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OAuth 2.0 access token or equivalent JWT with `sub`, `aud`, `exp`, and the required reminders scope.
+  headers:
+    RequestId:
+      description: Correlation id for support and diagnostics.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ETag:
+      description: Strong or opaque resource version validator. Send as `expectedEtag` in a mutation operation.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor returned by a previous page. Do not decode or construct it.
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 4096
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of objects/changes to return.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+    ListId:
+      name: listId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Client-generated key retained for at least 30 days. Reuse only when retrying the exact same request body.
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+    RequestIdOptional:
+      name: X-Request-Id
+      in: header
+      description: Optional client correlation id; the server always returns one.
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  responses:
+    InvalidRequest:
+      description: Request validation failed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing, expired, or invalid bearer token.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Token lacks the requested scope or account access.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource does not exist for this account.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    CursorExpired:
+      description: Cursor is older than the retained change history. Restart with a full snapshot.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            type: https://myrodex.dev/problems/cursor-expired
+            title: Cursor expired
+            status: 410
+            code: cursor_expired
+            detail: The supplied cursor predates the retained change history. Perform a full snapshot and start a new changes feed.
+            requestId: req_01JCURSOR0000000000000001
+    RateLimited:
+      description: Too many requests.
+      headers:
+        Retry-After:
+          description: Seconds until retry is permitted.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ProviderUnavailable:
+      description: One or more upstream providers are temporarily unavailable.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    List:
+      $ref: '../schemas/list.schema.json'
+    Task:
+      $ref: '../schemas/task.schema.json'
+    Tombstone:
+      $ref: '../schemas/tombstone.schema.json'
+    ProviderRef:
+      $ref: '../schemas/provider-ref.schema.json'
+    Warning:
+      $ref: '../schemas/warning.schema.json'
+    Capabilities:
+      $ref: '../schemas/capabilities.schema.json'
+    Change:
+      $ref: '../schemas/change.schema.json'
+    Conflict:
+      $ref: '../schemas/conflict.schema.json'
+    MutationBatchRequest:
+      $ref: '../schemas/mutation-batch.schema.json'
+    MutationBatchResponse:
+      $ref: '../schemas/mutation-batch-response.schema.json'
+    ListPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, hasMore, serverTime]
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/List'
+        nextCursor:
+          type: [string, 'null']
+          maxLength: 4096
+        hasMore:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+    TaskPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, hasMore, serverTime]
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/Task'
+        nextCursor:
+          type: [string, 'null']
+          maxLength: 4096
+        hasMore:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+    ChangesPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, hasMore, serverTime, tombstoneRetentionDays]
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/Change'
+        nextCursor:
+          type: [string, 'null']
+          maxLength: 4096
+        hasMore:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+        tombstoneRetentionDays:
+          type: integer
+          minimum: 30
+        warnings:
+          type: array
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/Warning'
+    Error:
+      $ref: '../schemas/error.schema.json'

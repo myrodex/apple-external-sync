@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Soft-delete tombstone",
+  "description": "Deletion metadata retained in the changes feed for at least 30 days. `retentionUntil` is calculated by the server and is not client-controlled.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resourceType", "resourceId", "deletedAt", "retentionUntil", "revision", "etag"],
+  "properties": {
+    "resourceType": {
+      "type": "string",
+      "enum": ["list", "task"]
+    },
+    "resourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "parentId": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "deletedAt": { "type": "string", "format": "date-time" },
+    "retentionUntil": { "type": "string", "format": "date-time" },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "etag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\"[^\"]+\"$"
+    },
+    "providerRefs": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "provider-ref.schema.json" }
+    }
+  }
+}
