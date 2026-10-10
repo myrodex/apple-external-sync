@@ -8,7 +8,7 @@
 4. Validate contracts and OpenAPI locally:
 
    ```sh
-   ./scripts/validate-contracts.sh
+   ./scripts/validate_protocol.sh
    ./scripts/openapi.sh lint
    swift test --parallel
    ```

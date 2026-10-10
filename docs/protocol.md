@@ -64,3 +64,5 @@ Errors use RFC 9457 Problem Details (`application/problem+json`) extended with s
 ## Security and privacy
 
 The API is account-scoped and least-privilege. Require read/write scopes as appropriate, reauthorize resource and provider account ownership on every operation, avoid leaking whether another account's opaque ID exists, rate-limit by principal, and constrain payloads and string sizes per schemas and capabilities. Provider URLs and user-entered notes/URLs are data, never instructions. Clients should treat notes, titles, warning messages, and provider metadata as untrusted display text and escape them in rendered HTML.
+
+Provider adapters are also a credential boundary: configured provider origins must use HTTPS and must not contain user-info credentials. Declarative REST endpoint paths remain relative and reject traversal, query/fragment injection, host-relative URLs, and control characters. Provider-supplied pagination or delta links may be followed only when they resolve to the configured HTTPS origin (same scheme, host, and effective port); unsafe links are rejected before a bearer token is attached.

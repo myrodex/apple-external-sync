@@ -43,10 +43,19 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
     }
 
     public func pullChanges(since cursor: String?) async throws -> RemoteChanges {
-        let token = try await accessToken()
+        try validateBaseURL()
         let state = try decodeCursor(cursor)
-        var listDeltaLink = state?.listDeltaLink ?? relativeURL("me/todo/lists/delta")
-        var taskLinks = Dictionary(uniqueKeysWithValues: state?.taskDeltaLinks.map { ($0.listID, $0.deltaLink) } ?? [])
+        var listDeltaLink: String
+        if let rawListDeltaLink = state?.listDeltaLink {
+            listDeltaLink = try validatedDeltaURL(rawListDeltaLink, context: "Microsoft Graph list delta").absoluteString
+        } else {
+            listDeltaLink = relativeURL("me/todo/lists/delta")
+        }
+        var taskLinks: [String: String] = [:]
+        for link in state?.taskDeltaLinks ?? [] {
+            taskLinks[link.listID] = try validatedDeltaURL(link.deltaLink, context: "Microsoft Graph task delta").absoluteString
+        }
+        let token = try await accessToken()
         var lists: [RemoteList] = []
         var tasks: [RemoteTask] = []
         var diagnostics: [FieldLossDiagnostic] = []
@@ -56,7 +65,7 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
         while true {
             pageCount += 1
             guard pageCount <= 10_000 else { throw SyncAdapterError.invalidResponse("Microsoft Graph delta pagination exceeded 10000 pages.") }
-            guard let listURL = URL(string: listDeltaLink) else { throw SyncAdapterError.invalidResponse("The Microsoft Graph list delta link is invalid.") }
+            let listURL = try validatedDeltaURL(listDeltaLink, context: "Microsoft Graph list delta")
             let page: GraphListPage = try await get(url: listURL, token: token)
             for item in page.value {
                 guard let id = item.id else { continue }
@@ -78,10 +87,12 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
                 }
             }
             if let nextLink = page.nextLink {
-                listDeltaLink = nextLink
+                listDeltaLink = try validatedDeltaURL(nextLink, context: "Microsoft Graph list pagination").absoluteString
                 continue
             }
-            if let deltaLink = page.deltaLink { listDeltaLink = deltaLink }
+            if let deltaLink = page.deltaLink {
+                listDeltaLink = try validatedDeltaURL(deltaLink, context: "Microsoft Graph list delta").absoluteString
+            }
             break
         }
 
@@ -94,7 +105,7 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
             while true {
                 pageCount += 1
                 guard pageCount <= 10_000 else { throw SyncAdapterError.invalidResponse("Microsoft Graph task delta pagination exceeded 10000 pages.") }
-                guard let taskURL = URL(string: taskLink) else { throw SyncAdapterError.invalidResponse("The Microsoft Graph task delta link is invalid.") }
+                let taskURL = try validatedDeltaURL(taskLink, context: "Microsoft Graph task delta")
                 let page: GraphTaskPage = try await get(url: taskURL, token: token)
                 for item in page.value {
                     guard let id = item.id else { continue }
@@ -125,10 +136,12 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
                     }
                 }
                 if let nextLink = page.nextLink {
-                    taskLink = nextLink
+                    taskLink = try validatedDeltaURL(nextLink, context: "Microsoft Graph task pagination").absoluteString
                     continue
                 }
-                if let deltaLink = page.deltaLink { taskLinks[listID] = deltaLink }
+                if let deltaLink = page.deltaLink {
+                    taskLinks[listID] = try validatedDeltaURL(deltaLink, context: "Microsoft Graph task delta").absoluteString
+                }
                 break
             }
         }
@@ -147,6 +160,7 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
     }
 
     public func push(_ mutations: [RemoteMutation], cursor: String?) async throws -> PushResult {
+        try validateBaseURL()
         let token = try await accessToken()
         var accepted = 0
         var rejected: [RejectedMutation] = []
@@ -214,6 +228,7 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
     }
 
     private func get<T: Decodable>(url: URL, token: String) async throws -> T {
+        try ProviderRequestSupport.validateProviderURL(url, baseURL: baseURL, context: "Microsoft Graph pagination")
         let request = HTTPRequestBuilder.make(url: url, method: "GET", bearerToken: token)
         return try HTTPRequestBuilder.decodeOrThrow(T.self, from: try await transport.execute(request))
     }
@@ -231,6 +246,14 @@ public struct MicrosoftGraphAdapter: ExternalSyncAdapter, FieldDiagnosticsProvid
     private func delete(path: String, token: String, revision: String?) async throws {
         let request = try HTTPRequestBuilder.make(baseURL: baseURL, path: path, method: "DELETE", bearerToken: token, headers: revision.map { ["If-Match": $0] } ?? [:])
         try HTTPRequestBuilder.checkSuccess(try await transport.execute(request))
+    }
+
+    private func validateBaseURL() throws {
+        try ProviderRequestSupport.validateHTTPSBaseURL(baseURL)
+    }
+
+    private func validatedDeltaURL(_ raw: String, context: String) throws -> URL {
+        try ProviderRequestSupport.validatedProviderURL(raw, baseURL: baseURL, context: context)
     }
 
     private func relativeURL(_ path: String) -> String {

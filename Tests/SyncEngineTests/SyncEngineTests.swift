@@ -175,6 +175,60 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertNil(persisted.taskOwners[sharedID])
     }
 
+    func testSQLiteQuarantineReservesAmbiguousIDFromNewAccountClaim() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let databaseURL = directory.appendingPathComponent("quarantine.sqlite")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let accountA = SyncAccount(provider: .genericREST, accountID: "account-a")
+        let accountB = SyncAccount(provider: .genericREST, accountID: "account-b")
+        let accountC = SyncAccount(provider: .genericREST, accountID: "account-c")
+        let quarantinedID = SyncID.deterministic(namespace: "genericREST:account-c:task:quarantined")
+        let knownID = SyncID.deterministic(namespace: "known:account-a")
+        let quarantinedTask = CanonicalTask(id: quarantinedID, title: "Ambiguous", createdAt: testEpoch, updatedAt: testEpoch)
+        let knownTask = CanonicalTask(id: knownID, title: "Known", createdAt: testEpoch, updatedAt: testEpoch)
+        let legacy = SyncState(
+            tasks: [knownTask, quarantinedTask],
+            taskReplicas: [
+                TaskReplica(externalID: ExternalTaskID(account: accountA, remoteTaskID: "ambiguous-a"), canonicalTaskID: quarantinedID, lastSyncedTask: quarantinedTask, lastSyncedAt: testEpoch),
+                TaskReplica(externalID: ExternalTaskID(account: accountB, remoteTaskID: "ambiguous-b"), canonicalTaskID: quarantinedID, lastSyncedTask: quarantinedTask, lastSyncedAt: testEpoch),
+                TaskReplica(externalID: ExternalTaskID(account: accountA, remoteTaskID: "known"), canonicalTaskID: knownID, lastSyncedTask: knownTask, lastSyncedAt: testEpoch)
+            ],
+            taskOwners: [knownID: accountA]
+        )
+        let store = try SQLiteLocalStore(url: databaseURL)
+        try await store.save(legacy)
+        let quarantineBefore = try await store.isQuarantined(entityType: .task, id: quarantinedID)
+        XCTAssertTrue(quarantineBefore)
+        let accountAStateBefore = try await store.load(account: accountA)
+        XCTAssertEqual(accountAStateBefore.task(id: knownID)?.title, "Known")
+
+        let adapter = ScriptedAdapter(account: accountC, pulls: [RemoteChanges(
+            changes: [.task(RemoteTask(remoteID: "quarantined", title: "New account claim", updatedAt: testEpoch, revision: "r1"))],
+            nextCursor: "cursor-c",
+            serverNow: testEpoch
+        )])
+        let engine = SyncEngine(account: accountC, adapter: adapter, stateStore: store, now: { testEpoch })
+        do {
+            _ = try await engine.sync()
+            XCTFail("A canonical ID retained in quarantine must not be claimed by a new account")
+        } catch let error as SyncEngineError {
+            guard case let .recordNotOwned(entityType, id) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(entityType, .task)
+            XCTAssertEqual(id, quarantinedID)
+        }
+        let pushes = await adapter.recordedPushes()
+        XCTAssertTrue(pushes.isEmpty)
+        let accountAStateAfter = try await store.load(account: accountA)
+        XCTAssertEqual(accountAStateAfter.task(id: knownID)?.title, "Known")
+        let accountCState = try await store.load(account: accountC)
+        XCTAssertTrue(accountCState.tasks.isEmpty)
+        let quarantineAfter = try await store.isQuarantined(entityType: .task, id: quarantinedID)
+        XCTAssertTrue(quarantineAfter)
+    }
+
     func testForeignConflictCannotBeReadOrResolved() async throws {
         let accountA = SyncAccount(provider: .genericREST, accountID: "account-a")
         let accountB = SyncAccount(provider: .genericREST, accountID: "account-b")

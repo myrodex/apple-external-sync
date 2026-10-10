@@ -80,7 +80,46 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
             }
             if present { candidates.insert(account) }
         }
+        // Quarantined payloads intentionally have no projected account row. Preserve
+        // any account evidence embedded in the quarantined records so ambiguous IDs are
+        // visible as multi-account candidates, while isQuarantined() reserves ownerless
+        // quarantined IDs that contain no trustworthy account evidence.
+        let quarantineRows = try query("SELECT payload FROM sync_state_quarantine;")
+        for row in quarantineRows {
+            let state = try Self.decodeCheckpoint(row.blob("payload"))
+            switch entityType {
+            case .task:
+                if state.task(id: id) != nil || state.taskOwners[id] != nil || state.taskReplicas.contains(where: { $0.canonicalTaskID == id }) {
+                    candidates.formUnion(state.taskOwnershipCandidates(id))
+                }
+            case .list:
+                if state.list(id: id) != nil || state.listOwners[id] != nil || state.listMappings.contains(where: { $0.canonicalListID == id }) || state.listReplicas.contains(where: { $0.canonicalListID == id }) {
+                    candidates.formUnion(state.listOwnershipCandidates(id))
+                }
+            }
+        }
         return candidates
+    }
+
+    /// Quarantine is intentionally not exposed through `load(account:)`: the records
+    /// have no trustworthy owner. It is nevertheless an authorization boundary. A
+    /// canonical ID found here is permanently reserved until an explicit repair/migration.
+    public func isQuarantined(entityType: EntityType, id: SyncID) async throws -> Bool {
+        let rows = try query("SELECT payload FROM sync_state_quarantine;")
+        for row in rows {
+            let state = try Self.decodeCheckpoint(row.blob("payload"))
+            switch entityType {
+            case .task:
+                if state.task(id: id) != nil || state.taskOwners[id] != nil || state.taskReplicas.contains(where: { $0.canonicalTaskID == id }) {
+                    return true
+                }
+            case .list:
+                if state.list(id: id) != nil || state.listOwners[id] != nil || state.listMappings.contains(where: { $0.canonicalListID == id }) || state.listReplicas.contains(where: { $0.canonicalListID == id }) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private func loadAllAccountStateSynchronously() throws -> SyncState {
@@ -100,7 +139,6 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
         try beginTransaction()
         do {
             try execute("DELETE FROM sync_account_state;")
-            try execute("DELETE FROM sync_state_quarantine;")
             for (account, accountState) in partition.accountStates {
                 try upsertAccountCheckpoint(account: account, payload: Self.encodeCheckpoint(accountState))
             }
@@ -860,17 +898,37 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
     }
 
     private static func migrateLegacyCheckpoint(_ handle: OpaquePointer) throws {
-        let rows = try query(handle, "SELECT payload FROM sync_state WHERE id = 1;")
-        guard let row = rows.first else { return }
-        let state = try decodeCheckpoint(row.blob("payload"))
-        let partition = partitionLegacyState(state)
+        // Acquire the write lock before reading the legacy row. Multiple app processes
+        // can construct SQLiteLocalStore simultaneously; this makes the migration truly
+        // one-time and prevents a late migrator from overwriting a new account checkpoint.
         try execute(handle, "BEGIN IMMEDIATE;")
         do {
+            let rows = try query(handle, "SELECT payload FROM sync_state WHERE id = 1;")
+            guard let row = rows.first else {
+                try execute(handle, "COMMIT;")
+                return
+            }
+            let state = try decodeCheckpoint(row.blob("payload"))
+            let partition = partitionLegacyState(state)
             for (account, accountState) in partition.accountStates {
-                try insertAccountCheckpoint(handle, account: account, payload: encodeCheckpoint(accountState))
+                let existing = try query(handle, """
+                    SELECT payload FROM sync_account_state WHERE provider = ? AND account_id = ?;
+                    """, bindings: [.text(account.provider.rawValue), .text(account.accountID)]).first
+                let combined = if let existing {
+                    mergeStates(try decodeCheckpoint(existing.blob("payload")), accountState)
+                } else {
+                    accountState
+                }
+                try insertAccountCheckpoint(handle, account: account, payload: encodeCheckpoint(combined))
             }
             if let quarantine = partition.quarantine {
-                try insertQuarantineCheckpoint(handle, quarantine, reason: partition.quarantineReason)
+                let existing = try query(handle, "SELECT payload FROM sync_state_quarantine WHERE key = ?;", bindings: [.text(legacyQuarantineKey)]).first
+                let combined = if let existing {
+                    mergeStates(try decodeCheckpoint(existing.blob("payload")), quarantine)
+                } else {
+                    quarantine
+                }
+                try insertQuarantineCheckpoint(handle, combined, reason: partition.quarantineReason)
             }
             try execute(handle, "DELETE FROM sync_state WHERE id = 1;")
             try execute(handle, "COMMIT;")

@@ -33,6 +33,52 @@ public enum ProviderDateCodec {
 
 
 public enum ProviderRequestSupport {
+    /// Provider base URLs are application configuration, but they still form the
+    /// credential boundary for every adapter request. Reject non-HTTPS or credentialed
+    /// origins before an access-token provider is invoked.
+    public static func validateHTTPSBaseURL(_ baseURL: URL) throws {
+        guard let components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.host != nil,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil else {
+            throw SyncAdapterError.unsafeProviderURL("the configured base URL must be an HTTPS origin without credentials, query, or fragment")
+        }
+    }
+
+    /// Validates a provider-supplied continuation URL against the configured HTTPS
+    /// origin. Relative links are resolved against the safe base URL; absolute links must
+    /// remain HTTPS and same-origin.
+    public static func validatedProviderURL(_ rawValue: String, baseURL: URL, context: String) throws -> URL {
+        try validateHTTPSBaseURL(baseURL)
+        guard let resolved = URL(string: rawValue, relativeTo: baseURL)?.absoluteURL,
+              let components = URLComponents(url: resolved, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.host != nil,
+              components.user == nil,
+              components.password == nil,
+              sameOrigin(baseURL, resolved) else {
+            throw SyncAdapterError.unsafeProviderURL("the \(context) link is not HTTPS and same-origin")
+        }
+        return resolved
+    }
+
+    public static func validateProviderURL(_ url: URL, baseURL: URL, context: String) throws {
+        _ = try validatedProviderURL(url.absoluteString, baseURL: baseURL, context: context)
+    }
+
+    private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false),
+              let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false) else { return false }
+        let leftPort = left.port ?? 443
+        let rightPort = right.port ?? 443
+        return left.scheme?.lowercased() == right.scheme?.lowercased()
+            && left.host?.lowercased() == right.host?.lowercased()
+            && leftPort == rightPort
+    }
+
     public static func executeJSON<T: Decodable>(
         _ type: T.Type,
         baseURL: URL,

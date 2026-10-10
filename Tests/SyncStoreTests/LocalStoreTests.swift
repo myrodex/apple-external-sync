@@ -296,6 +296,10 @@ final class LocalStoreTests: XCTestCase {
             XCTAssertTrue(migratedB.lists.isEmpty)
             XCTAssertTrue(aggregate.lists.contains { $0.id == knownID })
             XCTAssertFalse(aggregate.lists.contains { $0.id == ambiguousID })
+            let quarantined = try await store.isQuarantined(entityType: .list, id: ambiguousID)
+            XCTAssertTrue(quarantined)
+            let candidates = try await store.ownershipCandidates(entityType: .list, id: ambiguousID)
+            XCTAssertEqual(candidates, Set([accountA, accountB]))
         }
 
         do {

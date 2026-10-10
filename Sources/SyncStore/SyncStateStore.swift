@@ -12,6 +12,9 @@ public protocol SyncStateStore: Sendable {
     /// Internal authorization evidence used to distinguish a new local ID from a foreign
     /// or ambiguous ID without returning another account's records to the caller.
     func ownershipCandidates(entityType: EntityType, id: SyncID) async throws -> Set<SyncAccount>
+    /// Returns true when the ID is retained in the durable ambiguous/quarantine
+    /// checkpoint. Quarantined IDs are permanently reserved until an explicit repair.
+    func isQuarantined(entityType: EntityType, id: SyncID) async throws -> Bool
     /// Durable audit records are part of the same account-scoped persistence boundary as
     /// the canonical checkpoint. Implementations must never return another account's runs.
     func syncRuns(account: SyncAccount, limit: Int?) async throws -> [SyncRun]
@@ -33,6 +36,9 @@ public extension SyncStateStore {
     }
 
     func ownershipCandidates(entityType: EntityType, id: SyncID) async throws -> Set<SyncAccount> { [] }
+    func isQuarantined(entityType: EntityType, id: SyncID) async throws -> Bool {
+        try await ownershipCandidates(entityType: entityType, id: id).count > 1
+    }
 
     func remove(account: SyncAccount) async throws {
         let state = try await load()
@@ -61,6 +67,15 @@ public actor InMemorySyncStateStore: SyncStateStore {
 
     public func save(_ state: SyncState, account: SyncAccount) async throws {
         self.state = self.state.replacing(account: account, with: state)
+    }
+
+    public func isQuarantined(entityType: EntityType, id: SyncID) async throws -> Bool {
+        switch entityType {
+        case .task:
+            return state.taskOwnershipCandidates(id).count > 1
+        case .list:
+            return state.listOwnershipCandidates(id).count > 1
+        }
     }
 
     public func ownershipCandidates(entityType: EntityType, id: SyncID) async throws -> Set<SyncAccount> {

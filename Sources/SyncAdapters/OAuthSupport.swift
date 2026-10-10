@@ -335,6 +335,7 @@ public actor OAuthSession {
     private let client: PKCEOAuthClient
     private let now: @Sendable () -> Date
     private let refreshSkew: TimeInterval
+    private let accountIdentityResolver: (@Sendable (OAuthToken) async throws -> String)?
     private var refreshTask: Task<OAuthToken, Error>?
 
     public init(
@@ -342,13 +343,15 @@ public actor OAuthSession {
         store: any OAuthTokenStore,
         client: PKCEOAuthClient,
         now: @escaping @Sendable () -> Date = Date.init,
-        refreshSkew: TimeInterval = 60
+        refreshSkew: TimeInterval = 60,
+        accountIdentityResolver: (@Sendable (OAuthToken) async throws -> String)? = nil
     ) {
         self.account = account
         self.store = store
         self.client = client
         self.now = now
         self.refreshSkew = refreshSkew
+        self.accountIdentityResolver = accountIdentityResolver
         self.refreshTask = nil
     }
 
@@ -366,6 +369,16 @@ public actor OAuthSession {
         }
         do {
             let refreshed = try await task.value
+            if let accountIdentityResolver {
+                let identity = try await accountIdentityResolver(refreshed)
+                guard identity == account.accountID else {
+                    // A refresh token can be rotated or mis-scoped by the provider. Do
+                    // not leave either the old or newly-issued credential available after
+                    // the authenticated subject changes underneath this account slot.
+                    try await store.removeToken(for: account)
+                    throw OAuthError.accountIdentityMismatch(expected: account.accountID, actual: identity)
+                }
+            }
             try await store.save(refreshed, for: account)
             refreshTask = nil
             return refreshed.accessToken

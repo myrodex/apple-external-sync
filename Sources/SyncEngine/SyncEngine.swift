@@ -272,7 +272,7 @@ public actor SyncEngine {
         )
 
         do {
-            let outcome = try applyRemoteChanges(
+            let outcome = try await applyRemoteChanges(
                 pulled,
                 to: &next,
                 at: effectiveNow,
@@ -388,7 +388,7 @@ public actor SyncEngine {
         to state: inout SyncState,
         at date: Date,
         counters: inout Counters
-    ) throws -> ApplyOutcome {
+    ) async throws -> ApplyOutcome {
         var outcome = ApplyOutcome()
         var seenLists = Set<String>()
         var seenTasks = Set<String>()
@@ -397,12 +397,18 @@ public actor SyncEngine {
         for change in changes.changes {
             if case let .list(list) = change {
                 seenLists.insert(list.remoteID)
+                let canonicalID = state.mapping(account: account, remoteListID: list.remoteID)?.canonicalListID
+                    ?? SyncID.deterministic(namespace: "\(account.provider.rawValue):\(account.accountID):list:\(list.remoteID)")
+                try await ensureNoForeignOwnership(entityType: .list, id: canonicalID)
                 try applyRemoteList(list, to: &state, at: date, counters: &counters)
             }
         }
         for change in changes.changes {
             if case let .task(task) = change {
                 seenTasks.insert(task.remoteID)
+                let canonicalID = state.replica(account: account, remoteTaskID: task.remoteID)?.canonicalTaskID
+                    ?? SyncID.deterministic(namespace: "\(account.provider.rawValue):\(account.accountID):task:\(task.remoteID)")
+                try await ensureNoForeignOwnership(entityType: .task, id: canonicalID)
                 try applyRemoteTask(task, to: &state, at: date, counters: &counters)
             }
         }
@@ -415,6 +421,9 @@ public actor SyncEngine {
                 let name = state.listReplica(account: account, remoteListID: remoteID)?.lastSyncedList.name
                     ?? state.listMappings.first(where: { $0.account == account && $0.remoteListID == remoteID }).flatMap { state.list(id: $0.canonicalListID)?.name }
                     ?? ""
+                let canonicalID = state.mapping(account: account, remoteListID: remoteID)?.canonicalListID
+                    ?? SyncID.deterministic(namespace: "\(account.provider.rawValue):\(account.accountID):list:\(remoteID)")
+                try await ensureNoForeignOwnership(entityType: .list, id: canonicalID)
                 try applyRemoteList(RemoteList(remoteID: remoteID, name: name, isDeleted: true, updatedAt: date), to: &state, at: date, counters: &counters)
             }
             let taskIDs = state.taskReplicas
@@ -427,6 +436,7 @@ public actor SyncEngine {
                                       isCompleted: replica.lastSyncedTask.isCompleted, dueDate: replica.lastSyncedTask.dueDate,
                                       completedAt: replica.lastSyncedTask.completedAt, priority: replica.lastSyncedTask.priority,
                                       isDeleted: true, updatedAt: date, revision: replica.remoteRevision)
+                try await ensureNoForeignOwnership(entityType: .task, id: replica.canonicalTaskID)
                 try applyRemoteTask(task, to: &state, at: date, counters: &counters)
             }
         }
@@ -807,6 +817,9 @@ public actor SyncEngine {
     }
 
     private func ensureNoForeignOwnership(entityType: EntityType, id: SyncID) async throws {
+        guard try await !stateStore.isQuarantined(entityType: entityType, id: id) else {
+            throw SyncEngineError.recordNotOwned(entityType: entityType, id: id)
+        }
         let candidates = try await stateStore.ownershipCandidates(entityType: entityType, id: id)
         guard candidates.isEmpty || (candidates.count == 1 && candidates.contains(account)) else {
             throw SyncEngineError.recordNotOwned(entityType: entityType, id: id)

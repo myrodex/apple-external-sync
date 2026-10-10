@@ -202,6 +202,8 @@ public struct RESTChangesDescriptor: Codable, Hashable, Sendable {
     public let path: String
     public let listItemsPath: RESTJSONPath
     public let taskItemsPath: RESTJSONPath
+    public let listFields: RESTFieldMap
+    public let taskFields: RESTFieldMap
     public let pagination: RESTPaginationDescriptor
     public let serverNowPath: RESTJSONPath?
     public let fullSnapshot: Bool
@@ -210,6 +212,8 @@ public struct RESTChangesDescriptor: Codable, Hashable, Sendable {
         path: String,
         listItemsPath: RESTJSONPath = "lists",
         taskItemsPath: RESTJSONPath = "tasks",
+        listFields: RESTFieldMap = .standard,
+        taskFields: RESTFieldMap = .standard,
         pagination: RESTPaginationDescriptor = .cursor,
         serverNowPath: RESTJSONPath? = "serverNow",
         fullSnapshot: Bool = false
@@ -217,12 +221,14 @@ public struct RESTChangesDescriptor: Codable, Hashable, Sendable {
         self.path = path
         self.listItemsPath = listItemsPath
         self.taskItemsPath = taskItemsPath
+        self.listFields = listFields
+        self.taskFields = taskFields
         self.pagination = pagination
         self.serverNowPath = serverNowPath
         self.fullSnapshot = fullSnapshot
     }
 
-    private enum CodingKeys: String, CodingKey { case path, listItemsPath, taskItemsPath, pagination, serverNowPath, fullSnapshot }
+    private enum CodingKeys: String, CodingKey { case path, listItemsPath, taskItemsPath, listFields, taskFields, pagination, serverNowPath, fullSnapshot }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -230,6 +236,8 @@ public struct RESTChangesDescriptor: Codable, Hashable, Sendable {
             path: try container.decode(String.self, forKey: .path),
             listItemsPath: try container.decodeIfPresent(RESTJSONPath.self, forKey: .listItemsPath) ?? "lists",
             taskItemsPath: try container.decodeIfPresent(RESTJSONPath.self, forKey: .taskItemsPath) ?? "tasks",
+            listFields: try container.decodeIfPresent(RESTFieldMap.self, forKey: .listFields) ?? .standard,
+            taskFields: try container.decodeIfPresent(RESTFieldMap.self, forKey: .taskFields) ?? .standard,
             pagination: try container.decodeIfPresent(RESTPaginationDescriptor.self, forKey: .pagination) ?? .cursor,
             serverNowPath: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .serverNowPath) ?? "serverNow",
             fullSnapshot: try container.decodeIfPresent(Bool.self, forKey: .fullSnapshot) ?? false

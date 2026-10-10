@@ -103,6 +103,9 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     private func validateAuthenticatedIdentity(_ token: OAuthToken) async throws {
         let actual = try await accountIdentityResolver(token)
         guard actual == account.accountID else {
+            // A token that authenticates a different subject must never remain in the
+            // configured account slot, including the reconnect path.
+            try? await tokenStore.removeToken(for: account)
             throw OAuthError.accountIdentityMismatch(expected: account.accountID, actual: actual)
         }
     }
@@ -115,7 +118,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     }
 
     private func discover() async throws -> SyncProviderConnection {
-        let session = OAuthSession(account: account, store: tokenStore, client: client)
+        let session = OAuthSession(account: account, store: tokenStore, client: client, accountIdentityResolver: accountIdentityResolver)
         let adapter = try makeAdapter(session.accessTokenProvider)
         let pulled = try await adapter.pullChanges(since: nil)
         return SyncProviderConnection(
@@ -174,7 +177,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
         )
         let client = PKCEOAuthClient(configuration: configuration, transport: transport)
         return DeviceOAuthConnectionFactory(choice: .microsoftToDo, account: account, displayName: "Microsoft To Do", client: client, tokenStore: tokenStore, accountIdentityResolver: { token in
-            try await Self.fetchProviderIdentity(endpoint: URL(string: "https://graph.microsoft.com/v1.0/me")!, token: token, transport: transport, keys: ["id", "userPrincipalName"])
+            try await Self.fetchProviderIdentity(endpoint: URL(string: "https://graph.microsoft.com/v1.0/me")!, token: token, transport: transport, keys: ["id"])
         }) { accessToken in
             MicrosoftGraphAdapter(account: account, baseURL: baseURL, transport: transport, accessToken: accessToken)
         }

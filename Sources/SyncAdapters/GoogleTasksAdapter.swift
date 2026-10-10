@@ -43,6 +43,7 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     }
 
     public func pullChanges(since cursor: String?) async throws -> RemoteChanges {
+        try validateBaseURL()
         let token = try await accessToken()
         let watermark = now()
         let updatedMin = cursor.flatMap(ProviderDateCodec.parse)
@@ -50,6 +51,7 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         var tasks: [RemoteTask] = []
         var diagnostics: [FieldLossDiagnostic] = []
         var listPageToken: String?
+        var listPageLink: URL?
 
         repeat {
             var query = [URLQueryItem(name: "maxResults", value: "100")]
@@ -57,15 +59,20 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             if let updatedMin, let value = ProviderDateCodec.encode(updatedMin) {
                 query.append(URLQueryItem(name: "updatedMin", value: value))
             }
-            let page: GoogleTaskListPage = try await ProviderRequestSupport.executeJSON(
-                GoogleTaskListPage.self,
-                baseURL: baseURL,
-                path: "/tasks/v1/users/@me/lists",
-                method: "GET",
-                token: token,
-                query: query,
-                transport: transport
-            )
+            let page: GoogleTaskListPage
+            if let listPageLink {
+                page = try await executeJSON(GoogleTaskListPage.self, url: listPageLink, method: "GET", token: token, query: [], body: nil, revision: nil)
+            } else {
+                page = try await ProviderRequestSupport.executeJSON(
+                    GoogleTaskListPage.self,
+                    baseURL: baseURL,
+                    path: "/tasks/v1/users/@me/lists",
+                    method: "GET",
+                    token: token,
+                    query: query,
+                    transport: transport
+                )
+            }
             for item in page.items {
                 let list = RemoteList(
                     remoteID: item.id,
@@ -82,8 +89,14 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                     diagnostics.append(contentsOf: fetched.diagnostics)
                 }
             }
-            listPageToken = page.nextPageToken
-        } while listPageToken != nil
+            if let nextLink = page.nextLink {
+                listPageLink = try ProviderRequestSupport.validatedProviderURL(nextLink, baseURL: baseURL, context: "Google Tasks pagination")
+                listPageToken = nil
+            } else {
+                listPageLink = nil
+                listPageToken = try validatedPageToken(page.nextPageToken)
+            }
+        } while listPageToken != nil || listPageLink != nil
 
         return RemoteChanges(
             changes: lists.map(RemoteChange.list) + tasks.map(RemoteChange.task),
@@ -95,6 +108,7 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     }
 
     public func push(_ mutations: [RemoteMutation], cursor: String?) async throws -> PushResult {
+        try validateBaseURL()
         let token = try await accessToken()
         var accepted = 0
         var rejected: [RejectedMutation] = []
@@ -146,6 +160,7 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         var result: [RemoteTask] = []
         var diagnostics: [FieldLossDiagnostic] = []
         var pageToken: String?
+        var pageLink: URL?
         repeat {
             var query = [
                 URLQueryItem(name: "showCompleted", value: "true"),
@@ -156,15 +171,20 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             if let updatedMin, let value = ProviderDateCodec.encode(updatedMin) {
                 query.append(URLQueryItem(name: "updatedMin", value: value))
             }
-            let page: GoogleTaskPage = try await ProviderRequestSupport.executeJSON(
-                GoogleTaskPage.self,
-                baseURL: baseURL,
-                path: "/tasks/v1/lists/\(listID)/tasks",
-                method: "GET",
-                token: token,
-                query: query,
-                transport: transport
-            )
+            let page: GoogleTaskPage
+            if let pageLink {
+                page = try await executeJSON(GoogleTaskPage.self, url: pageLink, method: "GET", token: token, query: [], body: nil, revision: nil)
+            } else {
+                page = try await ProviderRequestSupport.executeJSON(
+                    GoogleTaskPage.self,
+                    baseURL: baseURL,
+                    path: "/tasks/v1/lists/\(listID)/tasks",
+                    method: "GET",
+                    token: token,
+                    query: query,
+                    transport: transport
+                )
+            }
             for item in page.items {
                 let task = ProviderMutationSupport.remoteTask(
                     id: item.id,
@@ -182,8 +202,14 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                 result.append(task)
                 diagnostics.append(contentsOf: ProviderFieldDiagnostics.forGoogle(task: task))
             }
-            pageToken = page.nextPageToken
-        } while pageToken != nil
+            if let nextLink = page.nextLink {
+                pageLink = try ProviderRequestSupport.validatedProviderURL(nextLink, baseURL: baseURL, context: "Google Tasks pagination")
+                pageToken = nil
+            } else {
+                pageLink = nil
+                pageToken = try validatedPageToken(page.nextPageToken)
+            }
+        } while pageToken != nil || pageLink != nil
         return FetchedTasks(tasks: result, diagnostics: diagnostics)
     }
 
@@ -222,6 +248,34 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         return try HTTPRequestBuilder.decodeOrThrow(type, from: try await transport.execute(request))
     }
 
+    private func executeJSON<T: Decodable>(_ type: T.Type, url: URL, method: String, token: String, query: [URLQueryItem], body: Data?, revision: String?) async throws -> T {
+        try ProviderRequestSupport.validateProviderURL(url, baseURL: baseURL, context: "Google Tasks pagination")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let existingQuery = components?.queryItems ?? []
+        components?.queryItems = existingQuery + query
+        guard let resolved = components?.url else {
+            throw SyncAdapterError.unsafeProviderURL("the Google Tasks pagination link is invalid")
+        }
+        let headers = revision.map { ["If-Match": $0] } ?? [:]
+        let request = HTTPRequestBuilder.make(url: resolved, method: method, bearerToken: token, body: body, headers: headers)
+        return try HTTPRequestBuilder.decodeOrThrow(type, from: try await transport.execute(request))
+    }
+
+    private func validateBaseURL() throws {
+        try ProviderRequestSupport.validateHTTPSBaseURL(baseURL)
+    }
+
+    private func validatedPageToken(_ token: String?) throws -> String? {
+        guard let token, !token.isEmpty else { return nil }
+        let hasScheme = URL(string: token)?.scheme != nil
+        let hasAuthorityPrefix = token.hasPrefix("//")
+        let hasControlCharacter = token.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        guard !hasScheme, !hasAuthorityPrefix, !hasControlCharacter else {
+            throw SyncAdapterError.unsafeProviderURL("the Google Tasks pagination token is an absolute or malformed URL")
+        }
+        return token
+    }
+
     private static func isRetryable(_ error: Error) -> Bool {
         if case SyncAdapterError.rateLimited = error { return true }
         if case SyncAdapterError.transport = error { return true }
@@ -229,8 +283,18 @@ public struct GoogleTasksAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     }
 }
 
-private struct GoogleTaskListPage: Codable { let items: [GoogleTaskList]; let nextPageToken: String? }
-private struct GoogleTaskPage: Codable { let items: [GoogleTask]; let nextPageToken: String? }
+private struct GoogleTaskListPage: Codable {
+    let items: [GoogleTaskList]
+    let nextPageToken: String?
+    let nextLink: String?
+    enum CodingKeys: String, CodingKey { case items; case nextPageToken; case nextLink }
+}
+private struct GoogleTaskPage: Codable {
+    let items: [GoogleTask]
+    let nextPageToken: String?
+    let nextLink: String?
+    enum CodingKeys: String, CodingKey { case items; case nextPageToken; case nextLink }
+}
 private struct GoogleTaskList: Codable { let id: String; let title: String; let updated: String?; let deleted: Bool?; let etag: String? }
 private struct GoogleTaskListWrite: Codable { let title: String }
 private struct GoogleTask: Codable { let id: String; let title: String?; let notes: String?; let status: String?; let due: String?; let completed: String?; let updated: String?; let deleted: Bool?; let etag: String? }

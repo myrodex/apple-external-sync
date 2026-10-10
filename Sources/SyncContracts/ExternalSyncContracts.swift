@@ -259,6 +259,7 @@ public enum SyncAdapterError: Error, LocalizedError, Equatable, Sendable {
     case transport(String)
     case rateLimited(retryAfter: TimeInterval?)
     case conditionalWriteFailed(remoteRevision: String?)
+    case unsafeProviderURL(String)
     case unsupported(String)
 
     public var errorDescription: String? {
@@ -273,6 +274,7 @@ public enum SyncAdapterError: Error, LocalizedError, Equatable, Sendable {
         case .conditionalWriteFailed(let revision):
             return revision.map { "The remote item changed (revision \($0))." }
                 ?? "The remote item changed before the write completed."
+        case .unsafeProviderURL(let message): return "The provider supplied an unsafe URL: \(message)"
         case .unsupported(let message): return "Provider capability is unsupported: \(message)"
         }
     }

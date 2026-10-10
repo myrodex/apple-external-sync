@@ -17,6 +17,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     private let configuration: GenericRESTConfiguration
     private let transport: any HTTPTransport
     private let accessToken: @Sendable () async throws -> String
+    private let now: @Sendable () -> Date
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let configurationError: SyncAdapterError?
@@ -25,12 +26,14 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         account: SyncAccount,
         configuration: GenericRESTConfiguration,
         transport: any HTTPTransport = URLSessionHTTPTransport(),
+        now: @escaping @Sendable () -> Date = Date.init,
         accessToken: @escaping @Sendable () async throws -> String
     ) {
         self.account = account
         self.configuration = configuration
         self.transport = transport
         self.accessToken = accessToken
+        self.now = now
         self.fieldCapabilities = configuration.fieldCapabilities
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
@@ -81,7 +84,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
 
     public func push(_ mutations: [RemoteMutation], cursor: String?) async throws -> PushResult {
         if let configurationError { throw configurationError }
-        guard !mutations.isEmpty else { return PushResult(accepted: 0, nextCursor: cursor, serverNow: Date()) }
+        guard !mutations.isEmpty else { return PushResult(accepted: 0, nextCursor: cursor, serverNow: now()) }
         let token = try await accessToken()
         var accepted = 0
         var rejected: [RejectedMutation] = []
@@ -98,7 +101,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                 rejected.append(RejectedMutation(mutation: mutation, reason: error.localizedDescription, retryable: Self.isRetryable(error)))
             }
         }
-        return PushResult(accepted: accepted, rejected: rejected, mappings: mappings, nextCursor: cursor, serverNow: Date(), diagnostics: diagnostics)
+        return PushResult(accepted: accepted, rejected: rejected, mappings: mappings, nextCursor: cursor, serverNow: now(), diagnostics: diagnostics)
     }
 
     private struct CollectionPage {
@@ -133,7 +136,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         var pageNumber = 1
         var values: [RemoteEntity] = []
         var diagnostics: [FieldLossDiagnostic] = []
-        var serverNow = Date()
+        var serverNow = now()
         var seenLinks = Set<String>()
         var lastCursor: String?
 
@@ -147,7 +150,8 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                 cursor: pageCursor,
                 pageNumber: pageNumber,
                 token: token,
-                seenLinks: &seenLinks
+                seenLinks: &seenLinks,
+                serverNowPath: nil
             )
             serverNow = max(serverNow, page.serverNow)
             for value in page.values {
@@ -177,9 +181,14 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         var lists: [RemoteList] = []
         var tasks: [RemoteTask] = []
         var diagnostics: [FieldLossDiagnostic] = []
-        var serverNow = Date()
+        var serverNow = now()
         var nextCursor: String?
         var seenLinks = Set<String>()
+        // Changes descriptors may override the collection maps for a provider-specific
+        // feed. When they retain the default map, inherit the configured list/task maps
+        // instead of silently falling back to the standard id/title names.
+        let listFields = descriptor.listFields == .standard ? configuration.lists.fields : descriptor.listFields
+        let taskFields = descriptor.taskFields == .standard ? configuration.tasks.fields : descriptor.taskFields
 
         while true {
             guard pageNumber <= descriptor.pagination.maxPages else {
@@ -191,7 +200,8 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                 cursor: pageCursor,
                 pageNumber: pageNumber,
                 token: token,
-                seenLinks: &seenLinks
+                seenLinks: &seenLinks,
+                serverNowPath: descriptor.serverNowPath
             )
             serverNow = max(serverNow, page.serverNow)
             let listValues = page.root.value(at: descriptor.listItemsPath).flatMap { value -> [RESTJSONValue]? in
@@ -204,11 +214,11 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             }
             if let listValues, let taskValues {
                 for value in listValues {
-                    let (entity, warnings) = try decodeList(value, fields: .standard)
+                    let (entity, warnings) = try decodeList(value, fields: listFields)
                     lists.append(entity); diagnostics.append(contentsOf: warnings)
                 }
                 for value in taskValues {
-                    let (entity, warnings) = try decodeTask(value, fields: .standard)
+                    let (entity, warnings) = try decodeTask(value, fields: taskFields)
                     tasks.append(entity); diagnostics.append(contentsOf: warnings)
                 }
             } else {
@@ -218,10 +228,10 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
                     let kind = value.value(at: RESTJSONPath("resourceType"))?.string()
                         ?? value.value(at: RESTJSONPath("type"))?.string()
                     if kind == "list" {
-                        let (entity, warnings) = try decodeList(value, fields: .standard)
+                        let (entity, warnings) = try decodeList(value, fields: listFields)
                         lists.append(entity); diagnostics.append(contentsOf: warnings)
                     } else if kind == "task" {
-                        let (entity, warnings) = try decodeTask(value, fields: .standard)
+                        let (entity, warnings) = try decodeTask(value, fields: taskFields)
                         tasks.append(entity); diagnostics.append(contentsOf: warnings)
                     } else {
                         throw SyncAdapterError.invalidResponse("A changes item is missing resourceType/type.")
@@ -242,7 +252,8 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         cursor: String?,
         pageNumber: Int,
         token: String,
-        seenLinks: inout Set<String>
+        seenLinks: inout Set<String>,
+        serverNowPath: RESTJSONPath?
     ) async throws -> CollectionPage {
         var query: [URLQueryItem] = []
         var requestPath = path
@@ -288,9 +299,10 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         if let nextCursor, pagination.mode == .nextLink {
             guard seenLinks.insert(nextCursor).inserted else { throw SyncAdapterError.invalidResponse("Pagination next link repeated.") }
         }
-        let serverNow = pagination.nextCursorPath.flatMap { root.value(at: $0)?.date() }
+        let serverNow = serverNowPath.flatMap { root.value(at: $0)?.date() }
+            ?? pagination.nextCursorPath.flatMap { root.value(at: $0)?.date() }
             ?? root.value(at: RESTJSONPath("serverNow"))?.date()
-            ?? Date()
+            ?? now()
         return CollectionPage(root: root, values: values, nextCursor: nextCursor, serverNow: serverNow)
     }
 

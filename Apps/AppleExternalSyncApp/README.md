@@ -2,10 +2,10 @@
 
 `AppleExternalSync.xcodeproj` contains the runnable SwiftUI application targets:
 
-- **AppleExternalSync iOS** — iOS 16+, bundle identifier `com.myrodex.appleexternalsync.ios`.
-- **AppleExternalSync macOS** — macOS 13+, bundle identifier `com.myrodex.appleexternalsync.macos`.
+- **AppleExternalSync iOS** — iOS 16+, bundle identifier `com.myrodex.appleexternalsync.ios`, scheme `AppleExternalSync-iOS`.
+- **AppleExternalSync macOS** — macOS 13+, bundle identifier `com.myrodex.appleexternalsync.macos`, scheme `AppleExternalSync-macOS`.
 
-Both targets link the local Swift package product `ExternalSync` from the repository root. The app targets own the device boundary: EventKit permissions, OAuth callback registration, background scheduling, SQLite Application Support storage, and macOS App Sandbox/network entitlements.
+Both targets link the local Swift package products `ExternalSync` and `SyncAppSupport` from the repository root. The app targets own the device boundary: EventKit permissions, OAuth callback registration, background scheduling, SQLite Application Support storage, and macOS App Sandbox/network entitlements. The canonical model and sync algorithms remain in the root package targets documented in [`../../docs/architecture.md`](../../docs/architecture.md).
 
 ## Build from the repository root
 
@@ -29,7 +29,13 @@ xcodebuild \
   build
 ```
 
-For a device or distributable archive, open the project in Xcode, select a development team, and enable normal signing. The local build command disables signing only so it works on CI and simulator hosts without a provisioning profile.
+The checked-in project defaults `CODE_SIGNING_ALLOWED = NO`, `CODE_SIGNING_REQUIRED = NO`, and an empty signing identity. These commands intentionally validate compilation without a provisioning profile. They are **not** install, launch, archive, or distribution checks: an unsigned iOS app cannot be installed on a physical device or distributed, and an unsigned macOS build does not validate its App Sandbox/network entitlements. They also do not validate Keychain persistence, EventKit authorization, background execution, login-item registration, or OAuth callback delivery. For those checks, open the project in Xcode, select a development team, enable normal signing, and run the target on the intended simulator/device or macOS host.
+
+The concrete `KeychainOAuthTokenStore` and `KeychainOAuthPendingAuthorizationStore` implementations are available only when the Apple `Security` framework is present. Portable package tests inject `InMemoryOAuthTokenStore`/`InMemoryOAuthPendingAuthorizationStore`; a non-Apple SwiftPM test run cannot prove device Keychain behavior. Do not treat a successful unsigned build or package test as evidence that entitlements or secure storage are configured for release.
+
+## Local storage and account lifecycle
+
+`ProductionSyncCoordinator` creates the default SQLite database at `Application Support/AppleExternalSync/sync.sqlite` (inside the app sandbox on iOS). The store partitions checkpoints and durable `sync_runs` by `(provider, accountID)`. On first open after the account-partitioning migration, the old singleton checkpoint is split using explicit ownership evidence. Records with missing or conflicting ownership are retained in `sync_state_quarantine`, omitted from account reads, and reserve their canonical IDs until an explicit repair. Disconnect removes the selected account's checkpoint and run history; the provider connection factory separately revokes/removes credentials from Keychain. Quarantined legacy records are not deleted by disconnect.
 
 ## Optional OAuth configuration
 
@@ -48,7 +54,7 @@ xcodebuild \
   build
 ```
 
-The callback URL is `appleexternalsync://oauth/callback`, registered in both platform Info.plists. Refresh tokens and pending PKCE state/code verifiers remain in the platform Keychain; pending authorization entries expire after ten minutes and are cleaned up on startup. Client secrets must never be added to the app target.
+The callback URL is `appleexternalsync://oauth/callback`, registered in both platform Info.plists. Refresh tokens and pending PKCE state/code verifiers remain in the platform Keychain; pending authorization entries expire after ten minutes and are cleaned up on startup. Client secrets must never be added to the app target. OAuth uses Authorization Code + PKCE and performs an account-identity check before persisting a token.
 
 Custom REST can be enabled by setting `EXTERNAL_SYNC_REST_CONFIGURATION_JSON` to a complete declarative JSON configuration. The configuration supplies the HTTPS base URL, list/task JSON field maps, pagination, optional changes feed, and create/update/delete mutation paths; it never contains a bearer token. Example shape:
 
@@ -66,7 +72,7 @@ Custom REST can be enabled by setting `EXTERNAL_SYNC_REST_CONFIGURATION_JSON` to
 }
 ```
 
-Its bearer token is read from the device Keychain using the configured service/account; the app never accepts or logs bearer tokens through the relay. The configuration is validated as HTTPS-only before the provider is exposed in the connection picker.
+Its bearer token is read from the device Keychain using the configured service/account; the app never accepts or logs bearer tokens through the relay. Configuration validation requires an HTTPS base URL without embedded credentials and relative endpoint paths: absolute URLs, `//` host-relative paths, `?`/`#` injection, `.`/`..` traversal, backslashes, and control characters are rejected. Provider-supplied pagination links and Microsoft Graph delta links are followed only when they resolve to the configured HTTPS origin (same scheme, host, and effective port); unsafe links fail closed before credentials are sent.
 
 ## Platform runtime behavior
 

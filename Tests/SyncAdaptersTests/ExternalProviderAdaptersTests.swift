@@ -35,6 +35,50 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer access")
     }
 
+    func testGoogleRejectsUnsafePaginationLinkWithoutSendingBearerToAnotherOrigin() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"items\":[],\"nextLink\":\"https://evil.test/steal\"}")
+        ])
+        let adapter = GoogleTasksAdapter(
+            account: SyncAccount(provider: .googleTasks, accountID: "google-account"),
+            baseURL: URL(string: "https://tasks.test")!,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("Cross-origin Google pagination link must be rejected")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].url?.host, "tasks.test")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    func testGoogleRejectsHTTPPaginationTokenBeforeFollowingIt() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"items\":[],\"nextPageToken\":\"http://tasks.test/next\"}")
+        ])
+        let adapter = GoogleTasksAdapter(
+            account: SyncAccount(provider: .googleTasks, accountID: "google-account"),
+            baseURL: URL(string: "https://tasks.test")!,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("An HTTP-looking Google pagination token must be rejected")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+    }
+
     func testGooglePushCarriesConditionalRevisionAndFieldLossDiagnostics() async throws {
         let transport = MockHTTPTransport([.json("{\"id\":\"t1\",\"title\":\"Ship\",\"status\":\"needsAction\",\"updated\":\"2023-11-14T22:13:20Z\",\"etag\":\"\\\"t1v2\\\"\"}")])
         let account = SyncAccount(provider: .googleTasks, accountID: "google-account")
@@ -74,6 +118,68 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertEqual(requests[0].url?.absoluteString, "https://graph.test/lists-delta-2")
         XCTAssertEqual(requests[1].url?.absoluteString, "https://graph.test/l1-delta-2")
         XCTAssertEqual(requests[2].url?.absoluteString, "https://graph.test/l2-delta-2")
+    }
+
+
+    func testGoogleAndMicrosoftRejectHTTPBaseURLsBeforeSendingBearerToken() async throws {
+        let googleTransport = MockHTTPTransport([])
+        let google = GoogleTasksAdapter(account: SyncAccount(provider: .googleTasks, accountID: "g"), baseURL: URL(string: "http://tasks.test")!, transport: googleTransport, accessToken: { "secret" })
+        do {
+            _ = try await google.pullChanges(since: nil)
+            XCTFail("HTTP Google base URL must fail closed")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let googleRequests = await googleTransport.requests
+        XCTAssertTrue(googleRequests.isEmpty)
+
+        let microsoftTransport = MockHTTPTransport([])
+        let microsoft = MicrosoftGraphAdapter(account: SyncAccount(provider: .microsoftGraph, accountID: "m"), baseURL: URL(string: "http://graph.test/v1.0")!, transport: microsoftTransport, accessToken: { "secret" })
+        do {
+            _ = try await microsoft.pullChanges(since: nil)
+            XCTFail("HTTP Graph base URL must fail closed")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let microsoftRequests = await microsoftTransport.requests
+        XCTAssertTrue(microsoftRequests.isEmpty)
+    }
+
+    func testMicrosoftRejectsCrossOriginDeltaLinkWithoutSendingBearerToken() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"value\":[],\"@odata.nextLink\":\"https://evil.test/steal\"}")
+        ])
+        let adapter = MicrosoftGraphAdapter(account: SyncAccount(provider: .microsoftGraph, accountID: "m"), baseURL: URL(string: "https://graph.test/v1.0")!, transport: transport, accessToken: { "secret" })
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("Cross-origin Graph delta link must be rejected")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    func testMicrosoftRejectsHTTPPaginationLinkBeforeFollowingIt() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"value\":[],\"@odata.nextLink\":\"http://graph.test/v1.0/next\"}")
+        ])
+        let adapter = MicrosoftGraphAdapter(
+            account: SyncAccount(provider: .microsoftGraph, accountID: "m"),
+            baseURL: URL(string: "https://graph.test/v1.0")!,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+
+        do {
+            _ = try await adapter.pullChanges(since: nil)
+            XCTFail("HTTP Graph pagination link must be rejected")
+        } catch let error as SyncAdapterError {
+            guard case .unsafeProviderURL = error else { return XCTFail("Expected typed unsafe URL error, got \(error)") }
+        }
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 1)
     }
 
     func testGenericRESTDeclarativeMappingPaginatesAndReportsUnsupportedFields() async throws {
@@ -125,6 +231,86 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertTrue(body.contains("code_verifier="))
         XCTAssertFalse(body.contains("client_secret"))
     }
+
+    func testOAuthRefreshRejectsIdentityMismatchBeforePersistingRefreshedToken() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let account = SyncAccount(provider: .googleTasks, accountID: "expected")
+        let old = OAuthToken(accessToken: "old", refreshToken: "refresh", expiresAt: now.addingTimeInterval(-10))
+        let store = InMemoryOAuthTokenStore()
+        try await store.save(old, for: account)
+        let transport = MockHTTPTransport([.json("{\"access_token\":\"new\",\"expires_in\":3600}")])
+        let client = PKCEOAuthClient(configuration: PKCEConfiguration(
+            provider: .googleTasks,
+            authorizationEndpoint: URL(string: "https://login.test/authorize")!,
+            tokenEndpoint: URL(string: "https://login.test/token")!,
+            clientID: "client",
+            redirectURI: "myapp://oauth/callback",
+            scopes: ["openid"]
+        ), transport: transport, now: { now })
+        let session = OAuthSession(account: account, store: store, client: client, now: { now }, refreshSkew: 0, accountIdentityResolver: { _ in "different" })
+        do {
+            _ = try await session.accessToken()
+            XCTFail("Refresh must validate the provider identity before persisting the token")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .accountIdentityMismatch(expected: "expected", actual: "different"))
+        }
+        let retained = try await store.token(for: account)
+        XCTAssertNil(retained, "A refresh identity mismatch must purge the account slot rather than retain a potentially wrong token.")
+    }
+
+    func testGenericRESTChangesFeedUsesConfiguredFieldMappings() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"lists\":[{\"key\":\"l1\",\"name\":\"Work\"}],\"tasks\":[{\"key\":\"t1\",\"name\":\"Ship\",\"collection\":\"l1\"}],\"next\":null,\"server_time\":\"2023-11-14T22:13:20Z\"}")
+        ])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.test")!,
+            lists: RESTCollectionDescriptor(path: "/lists"),
+            tasks: RESTCollectionDescriptor(path: "/tasks"),
+            changes: RESTChangesDescriptor(
+                path: "/changes",
+                listFields: RESTFieldMap(id: "key", title: "name"),
+                taskFields: RESTFieldMap(id: "key", title: "name", listID: "collection"),
+                pagination: .none,
+                serverNowPath: "server_time"
+            )
+        )
+        let adapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "changes"),
+            configuration: config,
+            transport: transport,
+            now: { Date(timeIntervalSince1970: 1_700_000_000) },
+            accessToken: { "secret" }
+        )
+        let changes = try await adapter.pullChanges(since: "cursor")
+        XCTAssertEqual(changes.changes.count, 2)
+        XCTAssertEqual(changes.serverNow, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertTrue(changes.changes.contains { if case .list(let list) = $0 { return list.remoteID == "l1" && list.name == "Work" }; return false })
+        XCTAssertTrue(changes.changes.contains { if case .task(let task) = $0 { return task.remoteID == "t1" && task.title == "Ship" && task.remoteListID == "l1" }; return false })
+    }
+
+    func testGenericRESTChangesFeedInheritsCollectionFieldMappingsWhenDescriptorUsesDefaults() async throws {
+        let transport = MockHTTPTransport([
+            .json("{\"lists\":[{\"key\":\"l1\",\"name\":\"Work\"}],\"tasks\":[{\"key\":\"t1\",\"name\":\"Ship\",\"collection\":\"l1\"}]}")
+        ])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.test")!,
+            lists: RESTCollectionDescriptor(path: "/lists", fields: RESTFieldMap(id: "key", title: "name")),
+            tasks: RESTCollectionDescriptor(path: "/tasks", fields: RESTFieldMap(id: "key", title: "name", listID: "collection")),
+            changes: RESTChangesDescriptor(path: "/changes", pagination: .none)
+        )
+        let adapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "changes-inherit"),
+            configuration: config,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+
+        let changes = try await adapter.pullChanges(since: nil)
+        XCTAssertEqual(changes.changes.count, 2)
+        XCTAssertTrue(changes.changes.contains { if case .list(let list) = $0 { return list.remoteID == "l1" && list.name == "Work" }; return false })
+        XCTAssertTrue(changes.changes.contains { if case .task(let task) = $0 { return task.remoteID == "t1" && task.remoteListID == "l1" }; return false })
+    }
+
     func testPendingOAuthAuthorizationStoreExpiresAndCleansState() async throws {
         let store = InMemoryOAuthPendingAuthorizationStore()
         let request = OAuthAuthorizationRequest(
