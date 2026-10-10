@@ -463,3 +463,149 @@ public struct KeychainOAuthTokenStore: OAuthTokenStore, Sendable {
     }
 #endif
 }
+
+/// A pending device-only OAuth request. The code verifier and state are short-lived
+/// secrets used only to complete one authorization flow, so they belong in secure
+/// storage rather than UserDefaults or the canonical sync database.
+public struct PendingOAuthAuthorization: Codable, Hashable, Sendable {
+    public let request: OAuthAuthorizationRequest
+    public let expiresAt: Date
+
+    public init(request: OAuthAuthorizationRequest, expiresAt: Date) {
+        self.request = request
+        self.expiresAt = expiresAt
+    }
+
+    public func isExpired(at date: Date) -> Bool {
+        expiresAt <= date
+    }
+}
+
+public protocol OAuthPendingAuthorizationStore: Sendable {
+    func save(_ pending: PendingOAuthAuthorization) async throws
+    func load(at date: Date) async throws -> PendingOAuthAuthorization?
+    func remove() async throws
+    func removeExpired(at date: Date) async throws
+}
+
+public actor InMemoryOAuthPendingAuthorizationStore: OAuthPendingAuthorizationStore {
+    private var pending: PendingOAuthAuthorization?
+
+    public init() {}
+
+    public func save(_ pending: PendingOAuthAuthorization) async throws {
+        self.pending = pending
+    }
+
+    public func load(at date: Date) async throws -> PendingOAuthAuthorization? {
+        guard let pending else { return nil }
+        guard !pending.isExpired(at: date) else {
+            self.pending = nil
+            return nil
+        }
+        return pending
+    }
+
+    public func remove() async throws {
+        pending = nil
+    }
+
+    public func removeExpired(at date: Date) async throws {
+        guard let pending, pending.isExpired(at: date) else { return }
+        self.pending = nil
+    }
+}
+
+/// Keychain-backed pending authorization state. It intentionally uses one account
+/// slot per app/service because only one interactive authorization is allowed at a
+/// time; a later request atomically replaces the previous expired-or-abandoned one.
+public struct KeychainOAuthPendingAuthorizationStore: OAuthPendingAuthorizationStore, Sendable {
+    public let service: String
+    public let account: String
+
+    public init(
+        service: String = "dev.myrodex.external-sync.oauth.pending",
+        account: String = "authorization"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    public func save(_ pending: PendingOAuthAuthorization) async throws {
+#if canImport(Security)
+        let data: Data
+        do { data = try JSONEncoder().encode(pending) }
+        catch { throw OAuthError.tokenStorage("Pending OAuth state encoding failed.") }
+        let query = baseQuery()
+        let updateStatus = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain update failed (\(updateStatus)).")
+        }
+        var add = query
+        add[kSecValueData as String] = data
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain save failed (\(addStatus)).")
+        }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+    public func load(at date: Date) async throws -> PendingOAuthAuthorization? {
+#if canImport(Security)
+        var query = baseQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain read failed (\(status)).")
+        }
+        guard let data = result as? Data else {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain returned invalid data.")
+        }
+        do {
+            let pending = try JSONDecoder().decode(PendingOAuthAuthorization.self, from: data)
+            if pending.isExpired(at: date) {
+                try await remove()
+                return nil
+            }
+            return pending
+        } catch let error as OAuthError {
+            throw error
+        } catch {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain data was invalid.")
+        }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+    public func remove() async throws {
+#if canImport(Security)
+        let status = SecItemDelete(baseQuery() as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw OAuthError.tokenStorage("Pending OAuth Keychain delete failed (\(status)).")
+        }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+    public func removeExpired(at date: Date) async throws {
+        _ = try await load(at: date)
+    }
+
+#if canImport(Security)
+    private func baseQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+    }
+#endif
+}

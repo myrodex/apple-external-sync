@@ -27,13 +27,17 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     private let defaults: UserDefaults
     private let providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory]
     private let selectedScope: SelectedListScope
+    private let pendingAuthorizationStore: any OAuthPendingAuthorizationStore
+    private let now: @Sendable () -> Date
     private var activeProviderFactory: (any SyncProviderConnectionFactory)?
     private var activeAdapter: (any ExternalSyncAdapter)?
 
     public init(
         databaseURL: URL? = nil,
         defaults: UserDefaults = .standard,
-        providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory] = [:]
+        providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory] = [:],
+        pendingAuthorizationStore: any OAuthPendingAuthorizationStore = KeychainOAuthPendingAuthorizationStore(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) throws {
         let resolvedURL = try databaseURL ?? Self.prepareDefaultDatabaseURL()
         self.stateStore = try SQLiteLocalStore(url: resolvedURL)
@@ -42,6 +46,8 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         self.listMapping = InMemoryEventKitListMapping()
         self.defaults = defaults
         self.providerFactories = providerFactories.isEmpty ? Self.defaultProviderFactories() : providerFactories
+        self.pendingAuthorizationStore = pendingAuthorizationStore
+        self.now = now
         self.selectedListIDs = Set(defaults.stringArray(forKey: "selected-list-ids") ?? [])
         self.selectedScope = SelectedListScope(selectedRemoteListIDs: self.selectedListIDs)
     }
@@ -49,6 +55,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     deinit { changeTask?.cancel() }
 
     public func loadSnapshot() async throws -> SyncAppSnapshot {
+        try? await pendingAuthorizationStore.removeExpired(at: now())
         let provider = defaults.string(forKey: "provider").flatMap(SyncProviderChoice.init(rawValue:))
         if provider == .appleReminders {
             account = SyncAccount(provider: .eventKit, accountID: "device")
@@ -122,29 +129,29 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         }
     }
 
-    private var pendingOAuth: (provider: SyncProviderChoice, request: OAuthAuthorizationRequest)?
-
     public func beginOAuthAuthorization(provider: SyncProviderChoice) async throws -> SyncOAuthAuthorization {
         guard let factory = providerFactories[provider] else { throw SyncAppCoordinatorError.providerUnavailable(provider.title) }
         let request = try factory.beginOAuthAuthorization()
-        pendingOAuth = (provider, request)
+        let pending = PendingOAuthAuthorization(request: request, expiresAt: now().addingTimeInterval(10 * 60))
+        try await pendingAuthorizationStore.save(pending)
         snapshot.connection = SyncConnectionState(provider: provider, status: .connecting, detail: "Complete sign-in in the browser…")
         return SyncOAuthAuthorization(provider: provider, url: request.authorizationURL)
     }
 
     public func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot {
-        guard let pendingOAuth, let factory = providerFactories[pendingOAuth.provider] else {
+        guard let pending = try await pendingAuthorizationStore.load(at: now()),
+              let factory = providerFactories[SyncProviderChoice(from: pending.request.provider)] else {
             throw SyncAppCoordinatorError.oauthCallbackInvalid
         }
+        let provider = SyncProviderChoice(from: pending.request.provider)
         do {
-            let connection = try await factory.completeOAuthAuthorization(callbackURL: callbackURL, request: pendingOAuth.request)
-            self.pendingOAuth = nil
-            let activated = try await activate(connection, provider: pendingOAuth.provider, factory: factory)
+            let connection = try await factory.completeOAuthAuthorization(callbackURL: callbackURL, request: pending.request)
+            try await pendingAuthorizationStore.remove()
+            let activated = try await activate(connection, provider: provider, factory: factory)
             snapshot.lastError = nil
             return activated
         } catch {
-            self.pendingOAuth = nil
-            snapshot.connection = SyncConnectionState(provider: pendingOAuth.provider, status: Self.connectionStatus(for: error), detail: error.localizedDescription)
+            snapshot.connection = SyncConnectionState(provider: provider, status: Self.connectionStatus(for: error), detail: error.localizedDescription)
             throw error
         }
     }
@@ -164,6 +171,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         snapshot.warnings = []
         selectedListIDs.removeAll()
         await selectedScope.set([])
+        try? await pendingAuthorizationStore.remove()
         try await factory?.disconnect()
         return snapshot
     }
@@ -343,8 +351,8 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         do {
             _ = try await loadSnapshot()
             guard snapshot.connection.isConnected, !selectedListIDs.isEmpty else { return false }
-            _ = try await syncNow()
-            return true
+            let updated = try await syncNow()
+            return updated.lastSync?.status.isSuccessfulForBackground == true
         } catch {
             snapshot.lastError = SyncErrorState(
                 phase: .persistence,
@@ -395,7 +403,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
 #else
 public struct ProductionSyncCoordinator: SyncAppCoordinator, Sendable {
     private let message: String
-    public init(databaseURL: URL? = nil, defaults: UserDefaults = .standard, providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory] = [:]) throws {
+    public init(databaseURL: URL? = nil, defaults: UserDefaults = .standard, providerFactories: [SyncProviderChoice: any SyncProviderConnectionFactory] = [:], pendingAuthorizationStore: any OAuthPendingAuthorizationStore = KeychainOAuthPendingAuthorizationStore(), now: @escaping @Sendable () -> Date = Date.init) throws {
         self.message = "EventKit is unavailable on this platform."
     }
     public func loadSnapshot() async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
@@ -413,3 +421,15 @@ public struct ProductionSyncCoordinator: SyncAppCoordinator, Sendable {
     public func runBackgroundSync() async -> Bool { false }
 }
 #endif
+
+
+private extension SyncProviderChoice {
+    init(from provider: SyncProvider) {
+        switch provider {
+        case .googleTasks: self = .googleTasks
+        case .microsoftGraph: self = .microsoftToDo
+        case .genericREST: self = .customREST
+        case .eventKit: self = .appleReminders
+        }
+    }
+}

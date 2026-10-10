@@ -46,33 +46,6 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         self.capabilities = values
     }
 
-    /// Compatibility convenience for the original fixed endpoint shape. New adapters
-    /// should pass `GenericRESTConfiguration` to make mapping and pagination explicit.
-    public init(
-        account: SyncAccount,
-        baseURL: URL,
-        endpoints: RESTEndpointSet = RESTEndpointSet(),
-        transport: any HTTPTransport = URLSessionHTTPTransport(),
-        accessToken: @escaping @Sendable () async throws -> String
-    ) {
-        let changes = endpoints.syncPath.map {
-            RESTChangesDescriptor(path: $0, listItemsPath: "lists", taskItemsPath: "tasks", pagination: .cursor, serverNowPath: "serverNow", fullSnapshot: false)
-        }
-        self.init(
-            account: account,
-            configuration: GenericRESTConfiguration(
-                baseURL: baseURL,
-                lists: RESTCollectionDescriptor(path: endpoints.listsPath, pagination: .cursor),
-                tasks: RESTCollectionDescriptor(path: endpoints.tasksPath, pagination: .cursor),
-                changes: changes,
-                listMutations: endpoints.syncPath == nil ? .none : RESTMutationEndpoint(createPath: endpoints.listsPath, updatePath: "\(endpoints.listsPath)/{id}", deletePath: "\(endpoints.listsPath)/{id}"),
-                taskMutations: endpoints.syncPath == nil ? .none : RESTMutationEndpoint(createPath: endpoints.tasksPath, updatePath: "\(endpoints.tasksPath)/{id}", deletePath: "\(endpoints.tasksPath)/{id}")
-            ),
-            transport: transport,
-            accessToken: accessToken
-        )
-    }
-
     public func pullChanges(since cursor: String?) async throws -> RemoteChanges {
         let token = try await accessToken()
         if let descriptor = configuration.changes {

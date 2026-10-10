@@ -47,10 +47,23 @@ public struct SelectedListsSyncAdapter: ExternalSyncAdapter, FieldDiagnosticsPro
             }
         }
         let hasDeferredChanges = changes.count != pulled.changes.count
-        let selectedIDs = selected
+        let visibleTaskIDs = Set(changes.compactMap { change in
+            if case .task(let task) = change { return task.remoteID }
+            return nil
+        })
         let diagnostics = pulled.diagnostics.filter { diagnostic in
             guard let resourceID = diagnostic.resourceID else { return true }
-            return selectedIDs.contains(resourceID)
+            switch diagnostic.resourceType?.lowercased() {
+            case "list":
+                return selected.contains(resourceID)
+            case "task":
+                return visibleTaskIDs.contains(resourceID)
+            default:
+                // Older providers may omit resourceType. Keep diagnostics attached
+                // to either selected lists or visible tasks instead of dropping task
+                // warnings by comparing their IDs to list IDs.
+                return selected.contains(resourceID) || visibleTaskIDs.contains(resourceID)
+            }
         }
         return RemoteChanges(
             changes: changes,

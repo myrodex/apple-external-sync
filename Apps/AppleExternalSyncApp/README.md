@@ -46,7 +46,7 @@ xcodebuild \
   build
 ```
 
-The callback URL is `appleexternalsync://oauth/callback`, registered in both platform Info.plists. Refresh tokens remain in the platform Keychain; client secrets must never be added to the app target.
+The callback URL is `appleexternalsync://oauth/callback`, registered in both platform Info.plists. Refresh tokens and pending PKCE state/code verifiers remain in the platform Keychain; pending authorization entries expire after ten minutes and are cleaned up on startup. Client secrets must never be added to the app target.
 
 Custom REST can be enabled by setting `EXTERNAL_SYNC_REST_CONFIGURATION_JSON` to a complete declarative JSON configuration. The configuration supplies the HTTPS base URL, list/task JSON field maps, pagination, optional changes feed, and create/update/delete mutation paths; it never contains a bearer token. Example shape:
 

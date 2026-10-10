@@ -294,7 +294,7 @@ public protocol DeviceOnlyOAuthProvider: Sendable {
     func revoke(credential: Credential) async throws
 }
 
-public struct OAuthAuthorizationRequest: Sendable, Hashable {
+public struct OAuthAuthorizationRequest: Codable, Sendable, Hashable {
     public let provider: SyncProvider
     public let authorizationURL: URL
     public let state: String

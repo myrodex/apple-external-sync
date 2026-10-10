@@ -174,6 +174,12 @@ public enum AppSyncRunStatus: String, Codable, Hashable, Sendable {
         }
     }
 
+    /// A committed sync with rejected writes or conflicts is not a successful
+    /// background run: the scheduler must report non-success so the system can retry.
+    public var isSuccessfulForBackground: Bool {
+        self == .succeeded
+    }
+
     public var systemImage: String {
         switch self {
         case .running: return "arrow.triangle.2.circlepath"

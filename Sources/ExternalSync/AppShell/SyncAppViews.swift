@@ -422,15 +422,6 @@ public struct SyncSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     #endif
-                    if model.automaticSyncRequiresApproval {
-                        Text("macOS requires approval for this login item.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                        Button("Open Login Items Settings") {
-                            model.openAutomaticSyncSettings()
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     if let error = model.loginItemError {
                         Text(error).foregroundStyle(.red)
                     }

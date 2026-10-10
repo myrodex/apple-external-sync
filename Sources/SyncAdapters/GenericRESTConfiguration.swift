@@ -221,6 +221,20 @@ public struct RESTChangesDescriptor: Codable, Hashable, Sendable {
         self.serverNowPath = serverNowPath
         self.fullSnapshot = fullSnapshot
     }
+
+    private enum CodingKeys: String, CodingKey { case path, listItemsPath, taskItemsPath, pagination, serverNowPath, fullSnapshot }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            path: try container.decode(String.self, forKey: .path),
+            listItemsPath: try container.decodeIfPresent(RESTJSONPath.self, forKey: .listItemsPath) ?? "lists",
+            taskItemsPath: try container.decodeIfPresent(RESTJSONPath.self, forKey: .taskItemsPath) ?? "tasks",
+            pagination: try container.decodeIfPresent(RESTPaginationDescriptor.self, forKey: .pagination) ?? .cursor,
+            serverNowPath: try container.decodeIfPresent(RESTJSONPath?.self, forKey: .serverNowPath) ?? "serverNow",
+            fullSnapshot: try container.decodeIfPresent(Bool.self, forKey: .fullSnapshot) ?? false
+        )
+    }
 }
 
 public struct RESTMutationEndpoint: Codable, Hashable, Sendable {

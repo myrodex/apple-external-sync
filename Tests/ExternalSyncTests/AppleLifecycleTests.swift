@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import ExternalSync
 @testable import SyncAppSupport
 
 final class AppleLifecycleTests: XCTestCase {
@@ -34,6 +35,12 @@ final class AppleLifecycleTests: XCTestCase {
 
         XCTAssertFalse(result)
         XCTAssertEqual(scheduler.snapshot().scheduleDelays, [9, 9])
+    }
+
+    func testCommittedPartialSyncIsNotASuccessfulBackgroundRun() {
+        XCTAssertTrue(AppSyncRunStatus.succeeded.isSuccessfulForBackground)
+        XCTAssertFalse(AppSyncRunStatus.partiallySucceeded.isSuccessfulForBackground)
+        XCTAssertFalse(AppSyncRunStatus.failed.isSuccessfulForBackground)
     }
 
     func testBackgroundRunReportsRescheduleFailure() async throws {

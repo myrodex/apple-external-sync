@@ -34,6 +34,33 @@ final class ScopedSyncAdapterTests: XCTestCase {
         })
     }
 
+    func testPullKeepsTaskDiagnosticsForSelectedTaskIDs() async throws {
+        let account = SyncAccount(provider: .googleTasks, accountID: "account")
+        let diagnostics = [
+            FieldLossDiagnostic(code: .fieldLoss, field: .taskPriority, resourceType: "task", resourceID: "t1", message: "priority lost"),
+            FieldLossDiagnostic(code: .fieldLoss, field: .taskPriority, resourceType: "task", resourceID: "t2", message: "priority lost"),
+            FieldLossDiagnostic(code: .fieldLoss, field: .listColor, resourceType: "list", resourceID: "work", message: "color lost")
+        ]
+        let base = ScopedFakeAdapter(account: account, changes: RemoteChanges(
+            changes: [
+                .list(RemoteList(remoteID: "work", name: "Work")),
+                .list(RemoteList(remoteID: "home", name: "Home")),
+                .task(RemoteTask(remoteID: "t1", title: "Work task", remoteListID: "work")),
+                .task(RemoteTask(remoteID: "t2", title: "Home task", remoteListID: "home"))
+            ],
+            nextCursor: "cursor-1",
+            serverNow: Date(),
+            diagnostics: diagnostics
+        ))
+        let adapter = SelectedListsSyncAdapter(base: base, scope: SelectedListScope(selectedRemoteListIDs: ["work"]))
+
+        let result = try await adapter.pullChanges(since: nil)
+
+        XCTAssertEqual(result.diagnostics.map(\.resourceID), ["t1", "work"])
+        XCTAssertTrue(result.diagnostics.contains { $0.field == .taskPriority && $0.resourceID == "t1" })
+        XCTAssertFalse(result.diagnostics.contains { $0.resourceID == "t2" })
+    }
+
     func testPushDefersOutOfScopeMutationsSoEngineRetainsThemForLater() async throws {
         let account = SyncAccount(provider: .googleTasks, accountID: "account")
         let base = ScopedFakeAdapter(account: account, changes: RemoteChanges(changes: [], nextCursor: nil, serverNow: Date()))

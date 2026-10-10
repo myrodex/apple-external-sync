@@ -31,11 +31,13 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         )
         let suiteName = "CoordinatorProviderFlowTests.\(UUID().uuidString)"
         let defaults = try temporaryDefaults(suiteName: suiteName)
+        let pendingStore = InMemoryOAuthPendingAuthorizationStore()
         let databaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sync-\(UUID().uuidString).sqlite")
         let coordinator = try ProductionSyncCoordinator(
             databaseURL: databaseURL,
             defaults: defaults,
-            providerFactories: [.googleTasks: factory]
+            providerFactories: [.googleTasks: factory],
+            pendingAuthorizationStore: pendingStore
         )
         defer {
             defaults.removePersistentDomain(forName: suiteName)
@@ -54,7 +56,15 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         }
 
         let secondRequest = try await coordinator.beginOAuthAuthorization(provider: .googleTasks)
-        let connected = try await coordinator.completeOAuthAuthorization(
+        // Simulate process relaunch: a new coordinator instance recovers the pending
+        // state/code verifier from the shared secure store before exchanging the callback.
+        let relaunchedCoordinator = try ProductionSyncCoordinator(
+            databaseURL: databaseURL,
+            defaults: defaults,
+            providerFactories: [.googleTasks: factory],
+            pendingAuthorizationStore: pendingStore
+        )
+        let connected = try await relaunchedCoordinator.completeOAuthAuthorization(
             callbackURL: URL(string: "appleexternalsync://oauth/callback?code=abc&state=\(secondRequestState(secondRequest))")!
         )
         XCTAssertEqual(connected.connection.provider, .googleTasks)
@@ -62,17 +72,69 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         let firstToken = try await tokenStore.token(for: account)
         XCTAssertNotNil(firstToken)
 
-        _ = try await coordinator.disconnect()
+        _ = try await relaunchedCoordinator.disconnect()
         let disconnectedToken = try await tokenStore.token(for: account)
         XCTAssertNil(disconnectedToken)
 
-        let thirdRequest = try await coordinator.beginOAuthAuthorization(provider: .googleTasks)
-        let reconnected = try await coordinator.completeOAuthAuthorization(
+        let thirdRequest = try await relaunchedCoordinator.beginOAuthAuthorization(provider: .googleTasks)
+        let reconnected = try await relaunchedCoordinator.completeOAuthAuthorization(
             callbackURL: URL(string: "appleexternalsync://oauth/callback?code=def&state=\(secondRequestState(thirdRequest))")!
         )
         XCTAssertEqual(reconnected.connection.status, .connected)
         let secondToken = try await tokenStore.token(for: account)
         XCTAssertEqual(secondToken?.accessToken, "access-2")
+    }
+
+    func testCoordinatorRecoversPendingOAuthAcrossReinitialization() async throws {
+        let transport = CoordinatorMockTransport(responses: [
+            .json("{\"access_token\":\"access-recovered\",\"refresh_token\":\"refresh-recovered\",\"expires_in\":3600}"),
+            .json("{\"items\":[]}")
+        ])
+        let account = SyncAccount(provider: .googleTasks, accountID: "recovery-test")
+        let tokenStore = InMemoryOAuthTokenStore()
+        let factory = DeviceOAuthConnectionFactory.googleTasks(
+            accountID: account.accountID,
+            clientID: "public-client",
+            redirectURI: "appleexternalsync://oauth/callback",
+            tokenStore: tokenStore,
+            transport: transport,
+            baseURL: URL(string: "https://tasks.test")!
+        )
+        let pendingStore = InMemoryOAuthPendingAuthorizationStore()
+        let suiteName = "CoordinatorProviderFlowTests.\(UUID().uuidString)"
+        let defaults = try temporaryDefaults(suiteName: suiteName)
+        let firstDatabaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sync-\(UUID().uuidString).sqlite")
+        let secondDatabaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sync-\(UUID().uuidString).sqlite")
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: firstDatabaseURL)
+            try? FileManager.default.removeItem(at: secondDatabaseURL)
+        }
+
+        let firstCoordinator = try ProductionSyncCoordinator(
+            databaseURL: firstDatabaseURL,
+            defaults: defaults,
+            providerFactories: [.googleTasks: factory],
+            pendingAuthorizationStore: pendingStore
+        )
+        let request = try await firstCoordinator.beginOAuthAuthorization(provider: .googleTasks)
+
+        let relaunchedCoordinator = try ProductionSyncCoordinator(
+            databaseURL: secondDatabaseURL,
+            defaults: defaults,
+            providerFactories: [.googleTasks: factory],
+            pendingAuthorizationStore: pendingStore
+        )
+        let connected = try await relaunchedCoordinator.completeOAuthAuthorization(
+            callbackURL: URL(string: "appleexternalsync://oauth/callback?code=recovered&state=\(secondRequestState(request))")!
+        )
+
+        XCTAssertEqual(connected.connection.provider, .googleTasks)
+        XCTAssertEqual(connected.connection.status, .connected)
+        let recoveredToken = try await tokenStore.token(for: account)
+        XCTAssertEqual(recoveredToken?.accessToken, "access-recovered")
+        let pendingAfterCompletion = try await pendingStore.load(at: Date())
+        XCTAssertNil(pendingAfterCompletion)
     }
 
     func testGenericRESTConfigurationDecodesAppJSONWithDefaultedFieldsAndEndpoints() throws {
@@ -101,7 +163,8 @@ final class CoordinatorProviderFlowTests: XCTestCase {
               "createPath": "/items",
               "updatePath": "/items/{id}",
               "deletePath": "/items/{id}"
-            }
+            },
+            "changes": { "path": "/changes" }
           }
         }
         """.utf8)
@@ -111,6 +174,7 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertEqual(settings.configuration.lists.fields.notes?.rawValue, "notes")
         XCTAssertEqual(settings.configuration.lists.pagination.cursorQueryName, "cursor")
         XCTAssertEqual(settings.configuration.listMutations.updatePath, "/collections/{id}")
+        XCTAssertEqual(settings.configuration.changes?.listItemsPath.rawValue, "lists")
     }
 
     func testCoordinatorExecutesConfiguredGenericRESTMutationThroughEngine() async throws {

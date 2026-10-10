@@ -53,18 +53,6 @@ public struct StaticBearerTokenProvider: Sendable {
     public func accessToken() async throws -> String { token }
 }
 
-public struct RESTEndpointSet: Sendable, Codable, Hashable {
-    public let listsPath: String
-    public let tasksPath: String
-    public let syncPath: String?
-
-    public init(listsPath: String = "/lists", tasksPath: String = "/tasks", syncPath: String? = "/sync") {
-        self.listsPath = listsPath
-        self.tasksPath = tasksPath
-        self.syncPath = syncPath
-    }
-}
-
 public enum HTTPRequestBuilder {
     public static func make(
         baseURL: URL,

@@ -125,6 +125,26 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertTrue(body.contains("code_verifier="))
         XCTAssertFalse(body.contains("client_secret"))
     }
+    func testPendingOAuthAuthorizationStoreExpiresAndCleansState() async throws {
+        let store = InMemoryOAuthPendingAuthorizationStore()
+        let request = OAuthAuthorizationRequest(
+            provider: .googleTasks,
+            authorizationURL: URL(string: "https://accounts.test/authorize")!,
+            state: "state",
+            codeVerifier: "verifier"
+        )
+        let now = Date(timeIntervalSince1970: 10_000)
+        try await store.save(PendingOAuthAuthorization(request: request, expiresAt: now.addingTimeInterval(60)))
+        let active = try await store.load(at: now.addingTimeInterval(30))
+        XCTAssertNotNil(active)
+        let expired = try await store.load(at: now.addingTimeInterval(61))
+        XCTAssertNil(expired)
+        try await store.save(PendingOAuthAuthorization(request: request, expiresAt: now.addingTimeInterval(60)))
+        try await store.remove()
+        let removed = try await store.load(at: now)
+        XCTAssertNil(removed)
+    }
+
 }
 
 private struct MockResponse {
