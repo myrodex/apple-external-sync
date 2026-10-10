@@ -60,3 +60,26 @@ public actor InMemoryEventKitListMapping: EventKitListMapping {
 
     public func allMappings() -> [SyncID: String] { values }
 }
+
+/// Actor-backed list selection used by a live app coordinator. The adapter reads the
+/// current set for every full refetch, so changing selection takes effect without
+/// rebuilding the EventKit adapter or engine.
+public actor MutableEventKitListSelection: EventKitListSelection {
+    private var selectedListIDs: Set<String>
+
+    public init(selectedListIDs: Set<String> = []) {
+        self.selectedListIDs = selectedListIDs
+    }
+
+    public func includes(_ list: EventKitReminderListSnapshot) async -> Bool {
+        selectedListIDs.contains(list.id)
+    }
+
+    public func replace(with listIDs: Set<String>) {
+        selectedListIDs = listIDs
+    }
+
+    public func selectedIDs() -> Set<String> {
+        selectedListIDs
+    }
+}

@@ -48,6 +48,7 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
                 name: calendar.title,
                 colorHex: Self.hexColor(calendar.cgColor),
                 isDefault: calendar.calendarIdentifier == defaultID,
+                isReadOnly: !calendar.allowsContentModifications,
                 createdAt: epoch,
                 updatedAt: epoch
             )
@@ -148,6 +149,7 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
             name: calendar.title,
             colorHex: Self.hexColor(calendar.cgColor),
             isDefault: calendar.calendarIdentifier == defaultID,
+            isReadOnly: !calendar.allowsContentModifications,
             createdAt: epoch,
             updatedAt: epoch
         )

@@ -24,6 +24,8 @@
     <string>$(EXTERNAL_SYNC_GOOGLE_CLIENT_ID)</string>
     <key>ExternalSyncMicrosoftClientID</key>
     <string>$(EXTERNAL_SYNC_MICROSOFT_CLIENT_ID)</string>
+    <key>ExternalSyncRESTBaseURL</key>
+    <string>$(EXTERNAL_SYNC_REST_BASE_URL)</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

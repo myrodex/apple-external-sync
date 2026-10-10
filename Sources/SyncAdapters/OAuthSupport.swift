@@ -6,6 +6,10 @@ import SyncDomain
 import CryptoKit
 #endif
 
+#if canImport(Security)
+import Security
+#endif
+
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -385,4 +389,77 @@ public extension OAuthSession {
     nonisolated var accessTokenProvider: @Sendable () async throws -> String {
         { [self] in try await self.accessToken() }
     }
+}
+
+/// Keychain-backed token store for Apple device apps. The storage key includes the
+/// provider and account identifier, so one account can never read another provider's
+/// token by accident. On non-Apple Foundation platforms the injected token-store
+/// abstraction remains usable, but this concrete secure implementation is unavailable.
+public struct KeychainOAuthTokenStore: OAuthTokenStore, Sendable {
+    public let service: String
+    public let accessGroup: String?
+
+    public init(service: String = "dev.myrodex.external-sync.oauth", accessGroup: String? = nil) {
+        self.service = service
+        self.accessGroup = accessGroup
+    }
+
+    public func token(for account: SyncAccount) async throws -> OAuthToken? {
+#if canImport(Security)
+        var query = baseQuery(for: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw OAuthError.tokenStorage("Keychain read failed (\(status)).") }
+        guard let data = result as? Data else { throw OAuthError.tokenStorage("Keychain returned invalid token data.") }
+        do { return try JSONDecoder().decode(OAuthToken.self, from: data) }
+        catch { throw OAuthError.tokenStorage("Keychain token data was invalid.") }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+    public func save(_ token: OAuthToken, for account: SyncAccount) async throws {
+#if canImport(Security)
+        let data: Data
+        do { data = try JSONEncoder().encode(token) }
+        catch { throw OAuthError.tokenStorage("Token encoding failed.") }
+        let query = baseQuery(for: account)
+        let attributes = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else { throw OAuthError.tokenStorage("Keychain update failed (\(updateStatus)).") }
+        var add = query
+        add[kSecValueData as String] = data
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { throw OAuthError.tokenStorage("Keychain save failed (\(addStatus)).") }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+    public func removeToken(for account: SyncAccount) async throws {
+#if canImport(Security)
+        let status = SecItemDelete(baseQuery(for: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw OAuthError.tokenStorage("Keychain delete failed (\(status)).")
+        }
+#else
+        throw OAuthError.tokenStorage("Keychain is unavailable on this platform.")
+#endif
+    }
+
+#if canImport(Security)
+    private func baseQuery(for account: SyncAccount) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "\(account.provider.rawValue):\(account.accountID)"
+        ]
+        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+        return query
+    }
+#endif
 }

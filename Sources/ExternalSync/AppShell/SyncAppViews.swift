@@ -1,5 +1,12 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public struct SyncAppRootView: View {
     @StateObject private var model: SyncAppViewModel
@@ -99,13 +106,25 @@ public struct ConnectionSetupView: View {
                 }
 
                 Button {
-                    model.connect(provider: provider)
+                    if provider == .appleReminders || provider == .customREST {
+                        model.connect(provider: provider)
+                    } else {
+                        model.beginOAuthAuthorization(provider: provider)
+                    }
                 } label: {
-                    Label("Connect", systemImage: "link.badge.plus")
+                    Label((provider == .appleReminders || provider == .customREST) ? "Connect" : "Sign in with \(provider.title)", systemImage: (provider == .appleReminders || provider == .customREST) ? "link.badge.plus" : "person.badge.key")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.isUpdating)
+                .onReceive(model.$authorizationRequest.compactMap { $0 }) { request in
+                    #if canImport(UIKit)
+                    UIApplication.shared.open(request.url)
+                    #elseif canImport(AppKit)
+                    NSWorkspace.shared.open(request.url)
+                    #endif
+                    _ = model.consumeAuthorizationRequest()
+                }
             }
         }
     }
@@ -195,6 +214,12 @@ public struct SyncDashboardView: View {
                     syncStatusCard
                     if !model.snapshot.conflicts.isEmpty {
                         conflictsCard
+                    }
+                    if !model.snapshot.warnings.isEmpty {
+                        warningsCard
+                    }
+                    if !model.snapshot.capabilities.isEmpty {
+                        capabilitiesCard
                     }
                     if let error = model.operationError {
                         errorCard(error)
@@ -292,6 +317,42 @@ public struct SyncDashboardView: View {
         }
         .padding()
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var warningsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Provider field notices", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            ForEach(model.snapshot.warnings) { warning in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(warning.message).font(.subheadline)
+                    if let field = warning.field {
+                        Text(field).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var capabilitiesCard: some View {
+        DisclosureGroup("Provider capabilities") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(model.snapshot.capabilities) { capability in
+                    HStack {
+                        Text(capability.field)
+                        Spacer()
+                        Text(capability.support.capitalized).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding(.top, 8)
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func errorCard(_ error: SyncErrorState) -> some View {

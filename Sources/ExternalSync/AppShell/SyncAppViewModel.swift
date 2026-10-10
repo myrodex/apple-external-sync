@@ -18,6 +18,7 @@ public final class SyncAppViewModel: ObservableObject {
     @Published public private(set) var isUpdating = false
     @Published public private(set) var operationError: SyncErrorState?
     @Published public private(set) var loginItemError: String?
+    @Published public private(set) var authorizationRequest: SyncOAuthAuthorization?
     @Published public private(set) var automaticSyncEnabled: Bool
 
     private let coordinator: any SyncAppCoordinator
@@ -68,6 +69,36 @@ public final class SyncAppViewModel: ObservableObject {
     public func connect(provider: SyncProviderChoice) {
         perform(.connectionSetup) { coordinator in
             try await coordinator.connect(provider: provider)
+        }
+    }
+
+    public func beginOAuthAuthorization(provider: SyncProviderChoice) {
+        guard !isUpdating else { return }
+        isUpdating = true
+        phase = .connectionSetup
+        operationError = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let request = try await coordinator.beginOAuthAuthorization(provider: provider)
+                self.authorizationRequest = request
+            } catch is CancellationError {
+                // The user can start a fresh authorization request.
+            } catch {
+                fail(error, phase: .connectionSetup)
+            }
+            isUpdating = false
+        }
+    }
+
+    public func consumeAuthorizationRequest() -> SyncOAuthAuthorization? {
+        defer { authorizationRequest = nil }
+        return authorizationRequest
+    }
+
+    public func completeOAuthAuthorization(callbackURL: URL) {
+        perform(.connectionSetup) { coordinator in
+            try await coordinator.completeOAuthAuthorization(callbackURL: callbackURL)
         }
     }
 

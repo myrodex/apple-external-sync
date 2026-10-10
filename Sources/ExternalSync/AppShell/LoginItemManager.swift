@@ -29,19 +29,38 @@ import ServiceManagement
 @MainActor
 public final class MacOSLoginItemManager: LoginItemManaging {
     public let isSupported = true
+    private let service: SMAppService
 
-    public var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
+    /// When `helperBundleIdentifier` is provided, the manager controls the bundled
+    /// helper in `Contents/Library/LoginItems`. With no identifier it controls the
+    /// main app login item, which is the correct fallback for a menu-bar/background
+    /// app that has no helper target yet.
+    public init(helperBundleIdentifier: String? = nil) {
+        if let helperBundleIdentifier, !helperBundleIdentifier.isEmpty {
+            service = SMAppService.loginItem(identifier: helperBundleIdentifier)
+        } else {
+            service = .mainApp
+        }
     }
 
-    public init() {}
+    public var isEnabled: Bool {
+        service.status == .enabled
+    }
+
+    public var requiresApproval: Bool {
+        service.status == .requiresApproval
+    }
 
     public func setEnabled(_ enabled: Bool) throws {
         if enabled {
-            try SMAppService.mainApp.register()
+            try service.register()
         } else {
-            try SMAppService.mainApp.unregister()
+            try service.unregister()
         }
+    }
+
+    public func openSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 }
 #endif

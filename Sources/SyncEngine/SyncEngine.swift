@@ -51,6 +51,7 @@ public struct SyncReport: Sendable, Hashable, Codable {
     public let cursorBefore: String?
     public let cursorAfter: String?
     public let committed: Bool
+    public let diagnostics: [FieldLossDiagnostic]
 
     public init(
         account: SyncAccount,
@@ -65,7 +66,8 @@ public struct SyncReport: Sendable, Hashable, Codable {
         deletedCount: Int,
         cursorBefore: String?,
         cursorAfter: String?,
-        committed: Bool
+        committed: Bool,
+        diagnostics: [FieldLossDiagnostic] = []
     ) {
         self.account = account
         self.startedAt = startedAt
@@ -80,6 +82,7 @@ public struct SyncReport: Sendable, Hashable, Codable {
         self.cursorBefore = cursorBefore
         self.cursorAfter = cursorAfter
         self.committed = committed
+        self.diagnostics = diagnostics
     }
 }
 
@@ -136,6 +139,10 @@ public actor SyncEngine {
     /// resolution also updates the canonical task snapshot; local-win leaves the local value
     /// in place. Merged is a caller-confirmed local value in this API and therefore has the
     /// same canonical effect as localWon.
+    public func resolveConflict(id: SyncID, resolution: ConflictResolution) async throws {
+        try await resolveConflict(SyncConflictResolution(conflictID: id, resolution: resolution))
+    }
+
     public func resolveConflict(_ resolution: SyncConflictResolution) async throws {
         var state = try await stateStore.load()
         guard let index = state.conflicts.firstIndex(where: { $0.id == resolution.conflictID }) else {
@@ -277,7 +284,8 @@ public actor SyncEngine {
                 deletedCount: counters.deleted,
                 cursorBefore: cursorBefore,
                 cursorAfter: next.cursor(for: account)?.value,
-                committed: true
+                committed: true,
+                diagnostics: pulled.diagnostics + pushResult.diagnostics
             )
         } catch let error as SyncEngineError {
             throw error

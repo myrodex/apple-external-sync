@@ -1,4 +1,5 @@
 import Foundation
+import SyncDomain
 
 /// Providers surfaced by the app shell. The sync engine owns provider mechanics;
 /// the shell only carries the user's explicit provider choice into that engine.
@@ -27,6 +28,24 @@ public enum SyncProviderChoice: String, CaseIterable, Codable, Hashable, Sendabl
         case .customREST: return "server.rack"
         }
     }
+
+    public init?(syncProvider: SyncProvider) {
+        switch syncProvider {
+        case .eventKit: self = .appleReminders
+        case .googleTasks: self = .googleTasks
+        case .microsoftGraph: self = .microsoftToDo
+        case .genericREST: self = .customREST
+        }
+    }
+
+    public var syncProvider: SyncProvider {
+        switch self {
+        case .appleReminders: return .eventKit
+        case .googleTasks: return .googleTasks
+        case .microsoftToDo: return .microsoftGraph
+        case .customREST: return .genericREST
+        }
+    }
 }
 
 public enum SyncPermissionKind: String, CaseIterable, Codable, Hashable, Sendable, Identifiable {
@@ -52,9 +71,11 @@ public enum SyncPermissionKind: String, CaseIterable, Codable, Hashable, Sendabl
         }
     }
 
-    /// Notifications improve reporting but are not required to read/write task data.
+    /// Reminders access is required for the Reminders-first sync path. Calendar
+    /// access is intentionally not requested because list/task sync does not need it;
+    /// notifications improve reporting but are optional.
     public var isRequiredForSync: Bool {
-        self != .notifications
+        self == .reminders
     }
 }
 
@@ -84,6 +105,41 @@ public struct SyncPermission: Codable, Hashable, Sendable, Identifiable {
     }
 
     public var id: SyncPermissionKind { kind }
+}
+
+
+public struct SyncCapabilitySummary: Codable, Hashable, Sendable, Identifiable {
+    public let field: String
+    public let support: String
+
+    public init(field: String, support: String) {
+        self.field = field
+        self.support = support
+    }
+
+    public var id: String { field }
+}
+
+public struct SyncWarningSummary: Codable, Hashable, Sendable, Identifiable {
+    public let id: UUID
+    public let code: String
+    public let field: String?
+    public let message: String
+    public let resourceID: String?
+
+    public init(
+        id: UUID = UUID(),
+        code: String,
+        field: String? = nil,
+        message: String,
+        resourceID: String? = nil
+    ) {
+        self.id = id
+        self.code = code
+        self.field = field
+        self.message = message
+        self.resourceID = resourceID
+    }
 }
 
 public struct SyncListOption: Codable, Hashable, Sendable, Identifiable {
@@ -217,6 +273,16 @@ public struct SyncErrorState: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+public struct SyncOAuthAuthorization: Hashable, Sendable {
+    public let provider: SyncProviderChoice
+    public let url: URL
+
+    public init(provider: SyncProviderChoice, url: URL) {
+        self.provider = provider
+        self.url = url
+    }
+}
+
 public enum SyncConnectionStatus: String, Codable, Hashable, Sendable {
     case disconnected
     case connecting
@@ -263,6 +329,8 @@ public struct SyncAppSnapshot: Codable, Hashable, Sendable {
     public var selectedListIDs: Set<String>
     public var lastSync: SyncRunSummary?
     public var conflicts: [SyncConflictSummary]
+    public var capabilities: [SyncCapabilitySummary]
+    public var warnings: [SyncWarningSummary]
     public var lastError: SyncErrorState?
 
     public init(
@@ -272,6 +340,8 @@ public struct SyncAppSnapshot: Codable, Hashable, Sendable {
         selectedListIDs: Set<String> = [],
         lastSync: SyncRunSummary? = nil,
         conflicts: [SyncConflictSummary] = [],
+        capabilities: [SyncCapabilitySummary] = [],
+        warnings: [SyncWarningSummary] = [],
         lastError: SyncErrorState? = nil
     ) {
         self.connection = connection
@@ -280,6 +350,8 @@ public struct SyncAppSnapshot: Codable, Hashable, Sendable {
         self.selectedListIDs = selectedListIDs
         self.lastSync = lastSync
         self.conflicts = conflicts
+        self.capabilities = capabilities
+        self.warnings = warnings
         self.lastError = lastError
     }
 

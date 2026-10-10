@@ -7,6 +7,8 @@ public protocol SyncAppCoordinator: Sendable {
     func loadSnapshot() async throws -> SyncAppSnapshot
     func requestPermissions() async throws -> SyncAppSnapshot
     func connect(provider: SyncProviderChoice) async throws -> SyncAppSnapshot
+    func beginOAuthAuthorization(provider: SyncProviderChoice) async throws -> SyncOAuthAuthorization
+    func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot
     func disconnect() async throws -> SyncAppSnapshot
     func updateListSelection(_ selectedListIDs: Set<String>) async throws -> SyncAppSnapshot
     func syncNow() async throws -> SyncAppSnapshot
@@ -41,6 +43,14 @@ public actor PreviewSyncCoordinator: SyncAppCoordinator {
         )
         snapshot.lastError = nil
         return snapshot
+    }
+
+    public func beginOAuthAuthorization(provider: SyncProviderChoice) async throws -> SyncOAuthAuthorization {
+        throw SyncAppCoordinatorError.oauthNotConfigured(provider)
+    }
+
+    public func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot {
+        throw SyncAppCoordinatorError.oauthNotConfigured(nil)
     }
 
     public func disconnect() async throws -> SyncAppSnapshot {
@@ -104,6 +114,9 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
     case noListsSelected
     case conflictNotFound
     case invalidSelection
+    case providerUnavailable(String)
+    case oauthNotConfigured(SyncProviderChoice?)
+    case oauthCallbackInvalid
 
     public var errorDescription: String? {
         switch self {
@@ -111,6 +124,10 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
         case .noListsSelected: return "Choose at least one list before starting a sync."
         case .conflictNotFound: return "That conflict is no longer available."
         case .invalidSelection: return "One or more selected lists are no longer available."
+        case .providerUnavailable(let provider): return "The provider is not available in this app runtime: \(provider)."
+        case .oauthNotConfigured(let provider):
+            return provider.map { "OAuth is not configured for \($0.title) in this app target." } ?? "The OAuth callback is no longer valid."
+        case .oauthCallbackInvalid: return "The OAuth callback could not be verified. Start sign-in again."
         }
     }
 }

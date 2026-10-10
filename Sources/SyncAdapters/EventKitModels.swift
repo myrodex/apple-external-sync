@@ -42,6 +42,7 @@ public struct EventKitReminderListSnapshot: Hashable, Sendable {
     public var name: String
     public var colorHex: String?
     public var isDefault: Bool
+    public var isReadOnly: Bool
     public var createdAt: Date
     public var updatedAt: Date
     public var revision: String
@@ -51,6 +52,7 @@ public struct EventKitReminderListSnapshot: Hashable, Sendable {
         name: String,
         colorHex: String? = nil,
         isDefault: Bool = false,
+        isReadOnly: Bool = false,
         createdAt: Date = .init(timeIntervalSince1970: 0),
         updatedAt: Date = .init(timeIntervalSince1970: 0),
         revision: String? = nil
@@ -59,13 +61,14 @@ public struct EventKitReminderListSnapshot: Hashable, Sendable {
         self.name = name
         self.colorHex = colorHex
         self.isDefault = isDefault
+        self.isReadOnly = isReadOnly
         self.createdAt = createdAt
         self.updatedAt = updatedAt
-        self.revision = revision ?? Self.makeRevision(id: id, name: name, colorHex: colorHex, isDefault: isDefault)
+        self.revision = revision ?? Self.makeRevision(id: id, name: name, colorHex: colorHex, isDefault: isDefault, isReadOnly: isReadOnly)
     }
 
-    public static func makeRevision(id: String, name: String, colorHex: String?, isDefault: Bool) -> String {
-        EventKitRevision.hash([id, name, colorHex ?? "", isDefault ? "1" : "0"])
+    public static func makeRevision(id: String, name: String, colorHex: String?, isDefault: Bool, isReadOnly: Bool = false) -> String {
+        EventKitRevision.hash([id, name, colorHex ?? "", isDefault ? "1" : "0", isReadOnly ? "1" : "0"])
     }
 }
 
