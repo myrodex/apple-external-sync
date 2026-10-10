@@ -189,6 +189,34 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
+    func testGenericRESTCreateRejectsSuccessfulResponseWithoutConfiguredRemoteID() async throws {
+        let transport = MockHTTPTransport([
+            .json("{}", status: 201)
+        ])
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.example.test")!,
+            lists: RESTCollectionDescriptor(path: "/lists"),
+            tasks: RESTCollectionDescriptor(path: "/tasks"),
+            listMutations: RESTMutationEndpoint(createPath: "/lists")
+        )
+        let adapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "rest"),
+            configuration: config,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+        let mutation = RemoteMutation.upsertList(
+            canonicalListID: SyncID.deterministic(namespace: "rest:create:list"),
+            list: RemoteList(remoteID: "", name: "Created")
+        )
+
+        let result = try await adapter.push([mutation], cursor: nil)
+        XCTAssertEqual(result.accepted, 0)
+        XCTAssertEqual(result.mappings, [])
+        XCTAssertEqual(result.rejected.count, 1)
+        XCTAssertTrue(result.rejected[0].reason.contains("remote identifier"))
+    }
+
     func testPendingOAuthConfigurationCanBeExpiredAndRemoved() async throws {
         let store = InMemoryOAuthPendingAuthorizationStore()
         let request = OAuthAuthorizationRequest(provider: .microsoftGraph, authorizationURL: URL(string: "https://login.test")!, state: "s", codeVerifier: "v")

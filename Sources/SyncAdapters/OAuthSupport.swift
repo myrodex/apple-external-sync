@@ -78,6 +78,7 @@ public enum OAuthError: Error, LocalizedError, Equatable, Sendable {
     case revocationUnavailable
     case pkceUnavailable
     case tokenStorage(String)
+    case accountIdentityMismatch(expected: String, actual: String)
 
     public var errorDescription: String? {
         switch self {
@@ -90,6 +91,7 @@ public enum OAuthError: Error, LocalizedError, Equatable, Sendable {
         case .revocationUnavailable: return "This OAuth provider does not expose token revocation."
         case .pkceUnavailable: return "PKCE S256 is unavailable on this platform."
         case .tokenStorage(let value): return "The OAuth token store failed: \(value)."
+        case .accountIdentityMismatch(let expected, let actual): return "The signed-in provider account does not match the configured account (expected \(expected), received \(actual))."
         }
     }
 }

@@ -26,12 +26,48 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertNil(secondToken)
     }
 
+    func testOAuthRejectsConfiguredAccountWhenAuthenticatedSubjectDiffers() async throws {
+        let transport = CoordinatorMockTransport(responses: [
+            .json("{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"expires_in\":3600}")
+        ])
+        let account = SyncAccount(provider: .googleTasks, accountID: "expected-subject")
+        let configuration = PKCEConfiguration(
+            provider: .googleTasks,
+            authorizationEndpoint: URL(string: "https://login.test/authorize")!,
+            tokenEndpoint: URL(string: "https://login.test/token")!,
+            clientID: "client",
+            redirectURI: "myapp://oauth/callback",
+            scopes: ["tasks.readonly"]
+        )
+        let factory = DeviceOAuthConnectionFactory(
+            choice: .googleTasks,
+            account: account,
+            client: PKCEOAuthClient(configuration: configuration, transport: transport),
+            tokenStore: InMemoryOAuthTokenStore(),
+            accountIdentityResolver: { _ in "different-subject" }
+        ) { _ in
+            throw SyncAdapterError.unavailable("adapter should not be created")
+        }
+        let request = try factory.beginOAuthAuthorization()
+        do {
+            _ = try await factory.completeOAuthAuthorization(
+                callbackURL: URL(string: "myapp://oauth/callback?code=abc&state=\(request.state)")!,
+                request: request
+            )
+            XCTFail("A token for a different authenticated subject must be rejected")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .accountIdentityMismatch(expected: "expected-subject", actual: "different-subject"))
+        }
+    }
+
     func testCoordinatorRoutesOAuthCallbackValidatesStateAndSupportsReconnect() async throws {
         let transport = CoordinatorMockTransport(responses: [
             .json("{\"access_token\":\"access-1\",\"refresh_token\":\"refresh-1\",\"expires_in\":3600}"),
+            .json("{\"sub\":\"oauth-test\"}"),
             .json("{\"items\":[]}"),
             .json("{}"), // token revocation on disconnect
             .json("{\"access_token\":\"access-2\",\"refresh_token\":\"refresh-2\",\"expires_in\":3600}"),
+            .json("{\"sub\":\"oauth-test\"}"),
             .json("{\"items\":[]}")
         ])
         let account = SyncAccount(provider: .googleTasks, accountID: "oauth-test")
@@ -103,6 +139,7 @@ final class CoordinatorProviderFlowTests: XCTestCase {
     func testCoordinatorRecoversPendingOAuthAcrossReinitialization() async throws {
         let transport = CoordinatorMockTransport(responses: [
             .json("{\"access_token\":\"access-recovered\",\"refresh_token\":\"refresh-recovered\",\"expires_in\":3600}"),
+            .json("{\"sub\":\"recovery-test\"}"),
             .json("{\"items\":[]}")
         ])
         let account = SyncAccount(provider: .googleTasks, accountID: "recovery-test")
@@ -164,7 +201,10 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         )
         let account = SyncAccount(provider: .genericREST, accountID: "privacy-account")
         let other = SyncAccount(provider: .genericREST, accountID: "other-account")
-        let factory = GenericRESTConnectionFactory(accountID: account.accountID, configuration: config, transport: transport, accessToken: { "token" })
+        let tokenStore = InMemoryOAuthTokenStore()
+        try await tokenStore.save(OAuthToken(accessToken: "account-token"), for: account)
+        try await tokenStore.save(OAuthToken(accessToken: "other-token"), for: other)
+        let factory = GenericRESTConnectionFactory(accountID: account.accountID, configuration: config, transport: transport, tokenStore: tokenStore, accessToken: { "token" })
         let suiteName = "CoordinatorProviderFlowTests.\(UUID().uuidString)"
         let defaults = try temporaryDefaults(suiteName: suiteName)
         let databaseURL = FileManager.default.temporaryDirectory.appendingPathComponent("sync-\(UUID().uuidString).sqlite")
@@ -185,6 +225,7 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         try await store.save(seeded)
         let coordinator = try ProductionSyncCoordinator(databaseURL: databaseURL, defaults: defaults, providerFactories: [.customREST: factory])
         _ = try await coordinator.connect(provider: .customREST)
+        _ = try await coordinator.updateListSelection(["l1"])
         _ = try await coordinator.disconnect()
         let result = try await store.load()
         XCTAssertFalse(result.lists.contains { $0.id == removedListID })
@@ -193,6 +234,12 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertTrue(result.listMappings.contains { $0.account == other })
         XCTAssertNil(result.cursor(for: account))
         XCTAssertNotNil(result.cursor(for: other))
+        let removedToken = try await tokenStore.token(for: account)
+        let retainedToken = try await tokenStore.token(for: other)
+        XCTAssertNil(removedToken)
+        XCTAssertEqual(retainedToken?.accessToken, "other-token")
+        XCTAssertNil(defaults.string(forKey: "provider"))
+        XCTAssertNil(defaults.stringArray(forKey: "selected-list-ids.genericREST.privacy-account"))
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: databaseURL)
     }
@@ -252,6 +299,23 @@ final class CoordinatorProviderFlowTests: XCTestCase {
         XCTAssertThrowsError(try GenericRESTConnectionSettings(jsonData: crossOrigin)) { error in
             guard case .unsafeEndpointPath = error as? GenericRESTConfigurationError else {
                 return XCTFail("Expected unsafe endpoint rejection, got \(error)")
+            }
+        }
+
+        let traversal = Data("""
+        {
+          "accountID": "rest",
+          "keychainService": "test.oauth",
+          "configuration": {
+            "baseURL": "https://rest.example.test/api",
+            "lists": { "path": "/../private/lists" },
+            "tasks": { "path": "/tasks" }
+          }
+        }
+        """.utf8)
+        XCTAssertThrowsError(try GenericRESTConnectionSettings(jsonData: traversal)) { error in
+            guard case .unsafeEndpointPath = error as? GenericRESTConfigurationError else {
+                return XCTFail("Expected traversal endpoint rejection, got \(error)")
             }
         }
 

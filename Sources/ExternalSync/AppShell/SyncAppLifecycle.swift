@@ -7,4 +7,5 @@ public protocol SyncAppLifecycleHandling: AnyObject {
     func applicationWillEnterForeground() async
     func applicationDidEnterBackground()
     func runBackgroundSync() async -> Bool
+    func recordBackgroundSyncError(_ message: String) async
 }

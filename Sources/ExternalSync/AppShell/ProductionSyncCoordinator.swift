@@ -53,8 +53,8 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         self.providerFactories = providerFactories.isEmpty ? Self.defaultProviderFactories() : providerFactories
         self.pendingAuthorizationStore = pendingAuthorizationStore
         self.now = now
-        self.selectedListIDs = Set(defaults.stringArray(forKey: "selected-list-ids") ?? [])
-        self.selectedScope = SelectedListScope(selectedRemoteListIDs: self.selectedListIDs)
+        self.selectedListIDs = []
+        self.selectedScope = SelectedListScope()
     }
 
     deinit { changeTask?.cancel() }
@@ -64,13 +64,27 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         let provider = defaults.string(forKey: "provider").flatMap(SyncProviderChoice.init(rawValue:))
         if provider == .appleReminders {
             account = SyncAccount(provider: .eventKit, accountID: localAccountID)
+        } else if let provider, let factory = providerFactories[provider] {
+            account = factory.account
+        } else {
+            account = nil
+        }
+        if let account {
+            selectedListIDs = Set(defaults.stringArray(forKey: selectedListKey(for: account)) ?? [])
+        } else {
+            selectedListIDs = []
         }
         let permission = await eventStore.authorizationStatus()
         let lists = permission.canRead ? try await availableLists() : []
         selectedListIDs = selectedListIDs.intersection(Set(lists.map(\.id)))
-        defaults.set(Array(selectedListIDs).sorted(), forKey: "selected-list-ids")
+        if let account { defaults.set(Array(selectedListIDs).sorted(), forKey: selectedListKey(for: account)) }
         await selectedScope.set(selectedListIDs)
-        let state = try await stateStore.load()
+        _ = try? await stateStore.cleanup(asOf: now(), retention: SQLiteLocalStore.defaultRetention)
+        let state = if let account {
+            try await stateStore.load(account: account)
+        } else {
+            SyncState()
+        }
         snapshot = SyncAppSnapshot(
             connection: connection(for: provider, permission: permission),
             permissions: [
@@ -79,14 +93,16 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
             ],
             availableLists: lists,
             selectedListIDs: selectedListIDs,
-            conflicts: conflictSummaries(state),
+            conflicts: conflictSummaries(state, account: account),
             lastError: nil
         )
+        if let account {
+            await restoreLatestAudit(for: account)
+        }
         if let provider, provider != .appleReminders, let factory = providerFactories[provider] {
             do {
                 let connection = try await factory.connect()
                 let activated = try await activate(connection, provider: provider, factory: factory)
-                snapshot.lastError = nil
                 return activated
             } catch {
                 snapshot.connection = SyncConnectionState(provider: provider, status: Self.connectionStatus(for: error), detail: error.localizedDescription)
@@ -115,10 +131,13 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
                 return snapshot
             }
             defaults.set(provider.rawValue, forKey: "provider")
-            account = SyncAccount(provider: .eventKit, accountID: localAccountID)
+            let eventKitAccount = SyncAccount(provider: .eventKit, accountID: localAccountID)
+            account = eventKitAccount
+            selectedListIDs = Set(defaults.stringArray(forKey: selectedListKey(for: eventKitAccount)) ?? [])
             snapshot.connection = SyncConnectionState(provider: provider, status: .connected, accountName: "This device", detail: "Apple Reminders is connected. Choose lists to sync.")
             snapshot.availableLists = try await availableLists()
             selectedListIDs = selectedListIDs.intersection(Set(snapshot.availableLists.map(\.id)))
+            defaults.set(Array(selectedListIDs).sorted(), forKey: selectedListKey(for: eventKitAccount))
             snapshot.selectedListIDs = selectedListIDs
             await selectedScope.set(selectedListIDs)
             observeChanges()
@@ -157,6 +176,9 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         let provider = SyncProviderChoice(from: pending.request.provider)
         do {
             let connection = try await factory.completeOAuthAuthorization(callbackURL: callbackURL, request: pending.request)
+            if let existingAccount = account, existingAccount != connection.account {
+                _ = try await disconnect()
+            }
             try await pendingAuthorizationStore.remove()
             let activated = try await activate(connection, provider: provider, factory: factory)
             snapshot.lastError = nil
@@ -185,11 +207,31 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         } catch {
             firstError = firstError ?? error
         }
+        do {
+            try await pendingAuthorizationStore.remove()
+        } catch {
+            firstError = firstError ?? error
+        }
+
+        // Keep the active identity/factory when either half fails. A subsequent
+        // Disconnect can then retry the failed cleanup instead of losing the only
+        // handles needed to revoke credentials or remove state.
+        if let firstError {
+            let occurredAt = now()
+            snapshot.lastError = SyncErrorState(
+                phase: .persistence,
+                message: firstError.localizedDescription,
+                occurredAt: occurredAt,
+                recoveryAction: "Retry disconnect to finish removing this account's credentials and sync state."
+            )
+            throw firstError
+        }
+
         activeProviderFactory = nil
         activeAdapter = nil
         account = nil
         defaults.removeObject(forKey: "provider")
-        defaults.removeObject(forKey: "selected-list-ids")
+        if let disconnectingAccount { defaults.removeObject(forKey: selectedListKey(for: disconnectingAccount)) }
         snapshot.connection = SyncConnectionState()
         snapshot.availableLists = []
         snapshot.selectedListIDs = []
@@ -197,8 +239,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         snapshot.warnings = []
         selectedListIDs.removeAll()
         await selectedScope.set([])
-        try? await pendingAuthorizationStore.remove()
-        if let firstError { throw firstError }
+        snapshot.lastError = nil
         return snapshot
     }
 
@@ -206,7 +247,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         let available = Set(snapshot.availableLists.map(\.id))
         guard ids.isSubset(of: available) else { throw SyncAppCoordinatorError.invalidSelection }
         selectedListIDs = ids
-        defaults.set(Array(ids).sorted(), forKey: "selected-list-ids")
+        if let account { defaults.set(Array(ids).sorted(), forKey: selectedListKey(for: account)) }
         snapshot.selectedListIDs = ids
         await selectedScope.set(ids)
         return snapshot
@@ -266,7 +307,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
             conflictCount: report.conflictCount,
             errorMessage: report.rejectedCount == 0 ? nil : "Some provider writes were rejected and will be retried."
         )
-        snapshot.conflicts = conflictSummaries(state)
+        snapshot.conflicts = conflictSummaries(state, account: account)
         snapshot.warnings = report.diagnostics.map { SyncWarningSummary(code: $0.code.rawValue, field: $0.field.rawValue, message: $0.message, resourceID: $0.resourceID) }
         return snapshot
     }
@@ -289,22 +330,28 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         case .dismiss: .dismissed
         }
         try await engine.resolveConflict(id: conflictID, resolution: domainResolution)
-        snapshot.conflicts = conflictSummaries(try await stateStore.load())
+        snapshot.conflicts = conflictSummaries(try await engine.currentState(), account: account)
         return snapshot
     }
 
     private func activate(_ connection: SyncProviderConnection, provider: SyncProviderChoice, factory: any SyncProviderConnectionFactory) async throws -> SyncAppSnapshot {
+        guard connection.account == factory.account else {
+            throw SyncAppCoordinatorError.providerAccountMismatch(expected: factory.account, actual: connection.account)
+        }
         self.account = connection.account
         self.activeProviderFactory = factory
         self.activeAdapter = SelectedListsSyncAdapter(base: connection.adapter, scope: selectedScope)
         defaults.set(provider.rawValue, forKey: "provider")
         snapshot.connection = SyncConnectionState(provider: provider, status: .connected, accountName: connection.displayName ?? connection.account.accountID, detail: "Connected. Choose lists to sync.")
         snapshot.availableLists = connection.lists.filter { !$0.isDeleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map { SyncListOption(id: $0.remoteID, name: $0.name, detail: nil, isReadOnly: false) }
-        selectedListIDs = selectedListIDs.intersection(Set(snapshot.availableLists.map(\.id)))
+        selectedListIDs = Set(defaults.stringArray(forKey: selectedListKey(for: connection.account)) ?? [])
+            .intersection(Set(snapshot.availableLists.map(\.id)))
+        defaults.set(Array(selectedListIDs).sorted(), forKey: selectedListKey(for: connection.account))
         await selectedScope.set(selectedListIDs)
         snapshot.selectedListIDs = selectedListIDs
         snapshot.capabilities = connection.fieldCapabilities.fields.sorted { $0.key.rawValue < $1.key.rawValue }.map { SyncCapabilitySummary(field: $0.key.rawValue, support: $0.value.rawValue) }
         snapshot.warnings = connection.diagnostics.map { SyncWarningSummary(code: $0.code.rawValue, field: $0.field.rawValue, message: $0.message, resourceID: $0.resourceID) }
+        await restoreLatestAudit(for: connection.account)
         return snapshot
     }
 
@@ -337,8 +384,9 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         }
     }
 
-    private func conflictSummaries(_ state: SyncState) -> [SyncConflictSummary] {
-        state.conflicts.filter { $0.resolution == .pending }.sorted { $0.createdAt < $1.createdAt }.map {
+    private func conflictSummaries(_ state: SyncState, account: SyncAccount?) -> [SyncConflictSummary] {
+        guard let account else { return [] }
+        return state.conflicts.filter { $0.account == account && $0.resolution == .pending }.sorted { $0.createdAt < $1.createdAt }.map {
             SyncConflictSummary(id: $0.id.description, title: $0.localTask?.title ?? $0.remoteTask?.title ?? $0.localList?.name ?? $0.remoteList?.name ?? "Sync conflict", fields: $0.fields.map(\.rawValue), detectedAt: $0.createdAt)
         }
     }
@@ -376,17 +424,90 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
     public func runBackgroundSync() async -> Bool {
         do {
             _ = try await loadSnapshot()
-            guard snapshot.connection.isConnected, !selectedListIDs.isEmpty else { return false }
+            guard snapshot.connection.isConnected else {
+                await recordBackgroundFailure(SyncAppCoordinatorError.notConnected)
+                return false
+            }
+            guard !selectedListIDs.isEmpty else {
+                await recordBackgroundFailure(SyncAppCoordinatorError.noListsSelected)
+                return false
+            }
             let updated = try await syncNow()
             return updated.lastSync?.status.isSuccessfulForBackground == true
         } catch {
-            snapshot.lastError = SyncErrorState(
-                phase: .persistence,
-                message: error.localizedDescription,
-                recoveryAction: "Open the app to review sync settings."
-            )
+            await recordBackgroundFailure(error)
             return false
         }
+    }
+
+    public func recordBackgroundSyncError(_ message: String) async {
+        await recordBackgroundFailure(NSError(domain: "AppleExternalSync.Background", code: 1, userInfo: [NSLocalizedDescriptionKey: message]))
+    }
+
+    private func recordBackgroundFailure(_ error: Error) async {
+        let occurredAt = now()
+        snapshot.lastError = SyncErrorState(
+            phase: .persistence,
+            message: error.localizedDescription,
+            occurredAt: occurredAt,
+            recoveryAction: "Open the app to review sync settings."
+        )
+        if let auditAccount = account ?? defaults.string(forKey: "provider")
+            .flatMap(SyncProviderChoice.init(rawValue:))
+            .flatMap({ providerFactories[$0]?.account }) {
+            var run = SyncRun(account: auditAccount, startedAt: occurredAt)
+            run.finishedAt = occurredAt
+            run.status = .failed
+            run.errorMessage = error.localizedDescription
+            try? await stateStore.upsertSyncRun(run)
+        }
+    }
+
+    private func restoreLatestAudit(for account: SyncAccount) async {
+        guard var run = try? await stateStore.syncRuns(account: account, limit: 1).first else { return }
+        if run.status == .running {
+            run.status = .failed
+            run.finishedAt = now()
+            run.errorMessage = "The previous sync stopped before it completed."
+            try? await stateStore.upsertSyncRun(run)
+        }
+        let status: AppSyncRunStatus
+        switch run.status {
+        case .running: status = .running
+        case .succeeded: status = .succeeded
+        case .partiallySucceeded: status = .partiallySucceeded
+        case .failed: status = .failed
+        case .cancelled: status = .cancelled
+        }
+        snapshot.lastSync = SyncRunSummary(
+            id: run.id,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+            status: status,
+            scannedCount: run.scannedCount,
+            createdCount: run.createdCount,
+            updatedCount: run.updatedCount,
+            deletedCount: run.deletedCount,
+            conflictCount: run.conflictCount,
+            errorMessage: run.errorMessage
+        )
+        if run.status == .failed {
+            snapshot.lastError = SyncErrorState(
+                phase: .persistence,
+                message: run.errorMessage ?? "The last background sync failed.",
+                occurredAt: run.finishedAt ?? run.startedAt,
+                recoveryAction: "Open the app to review sync settings."
+            )
+        } else {
+            snapshot.lastError = nil
+        }
+    }
+
+    private func selectedListKey(for account: SyncAccount) -> String {
+        // UserDefaults keys accept the provider's opaque stable identity directly. Do not
+        // normalize punctuation: replacing dots/underscores would make distinct accounts
+        // share a selection slot.
+        return "selected-list-ids.\(account.provider.rawValue).\(account.accountID)"
     }
 
     private static func defaultProviderFactories(bundle: Bundle = .main) -> [SyncProviderChoice: any SyncProviderConnectionFactory] {
@@ -450,6 +571,7 @@ public struct ProductionSyncCoordinator: SyncAppCoordinator, Sendable {
     public func resolveConflict(id: String, resolution: SyncConflictResolution) async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func applicationWillEnterForeground() async {}
     public func applicationDidEnterBackground() {}
+    public func recordBackgroundSyncError(_ message: String) async {}
     public func runBackgroundSync() async -> Bool { false }
 }
 #endif

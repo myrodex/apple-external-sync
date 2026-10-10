@@ -11,6 +11,7 @@ public enum SyncEngineError: Error, LocalizedError, Equatable, Sendable {
     case stateStoreFailure(String)
     case pushFailed(String)
     case conflictNotFound(SyncID)
+    case recordNotOwned(entityType: EntityType, id: SyncID)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +21,7 @@ public enum SyncEngineError: Error, LocalizedError, Equatable, Sendable {
         case let .stateStoreFailure(message): return "Unable to persist sync state: \(message)"
         case let .pushFailed(message): return "Unable to push sync mutations: \(message)"
         case let .conflictNotFound(id): return "Conflict \(id) was not found."
+        case let .recordNotOwned(entityType, id): return "The \(entityType.rawValue) \(id) is not owned by this sync account."
         }
     }
 }
@@ -122,11 +124,11 @@ public actor SyncEngine {
     }
 
     public func currentState() async throws -> SyncState {
-        try await stateStore.load()
+        try await stateStore.load(account: account)
     }
 
     public func queuedConflicts() async throws -> [SyncConflict] {
-        let state = try await stateStore.load()
+        let state = try await stateStore.load(account: account)
         return state.conflicts
             .filter { $0.resolution == .pending }
             .sorted { lhs, rhs in
@@ -144,12 +146,15 @@ public actor SyncEngine {
     }
 
     public func resolveConflict(_ resolution: SyncConflictResolution) async throws {
-        var state = try await stateStore.load()
-        guard let index = state.conflicts.firstIndex(where: { $0.id == resolution.conflictID }) else {
+        var state = try await stateStore.load(account: account)
+        guard let index = state.conflicts.firstIndex(where: { $0.id == resolution.conflictID && $0.account == account }) else {
+            // Deliberately report the same result for a missing or foreign conflict ID.
             throw SyncEngineError.conflictNotFound(resolution.conflictID)
         }
         let conflict = state.conflicts[index]
         guard conflict.resolution == .pending else { return }
+        if let taskID = conflict.canonicalTaskID { try ensureOwnedTask(taskID, in: state) }
+        if let listID = conflict.canonicalListID { try ensureOwnedList(listID, in: state) }
 
         let resolvedAt = now()
         switch resolution.resolution {
@@ -175,24 +180,36 @@ public actor SyncEngine {
         }
         state.conflicts[index].resolution = resolution.resolution
         state.conflicts[index].resolvedAt = resolvedAt
-        try await stateStore.save(state)
+        try await stateStore.save(state, account: account)
     }
 
     /// Apply one local mutation transactionally. The next sync compares these values with
     /// their replicas and emits provider mutations; no eager network call is made here.
     public func applyLocalChange(_ change: LocalChange) async throws {
-        var state = try await stateStore.load()
+        var state = try await stateStore.load(account: account)
         let timestamp = now()
         switch change {
         case let .upsertTask(task):
+            try await ensureNoForeignOwnership(entityType: .task, id: task.id)
+            try ensureOwnedOrClaimTask(task.id, in: &state)
+            if let listID = task.listID {
+                try await ensureNoForeignOwnership(entityType: .list, id: listID)
+                try ensureOwnedList(listID, in: state)
+            }
             upsertTask(task, into: &state)
         case let .deleteTask(id, reason, at):
+            try await ensureNoForeignOwnership(entityType: .task, id: id)
             guard let index = state.tasks.firstIndex(where: { $0.id == id }) else { return }
+            try ensureOwnedTask(id, in: state)
             state.tasks[index] = state.tasks[index].markingDeleted(at: at, reason: reason)
         case let .upsertList(list):
+            try await ensureNoForeignOwnership(entityType: .list, id: list.id)
+            try ensureOwnedOrClaimList(list.id, in: &state)
             upsertList(list, into: &state)
         case let .deleteList(id, reason, at):
+            try await ensureNoForeignOwnership(entityType: .list, id: id)
             guard let index = state.lists.firstIndex(where: { $0.id == id }) else { return }
+            try ensureOwnedList(id, in: state)
             var copy = state.lists[index]
             copy.deletedAt = at
             copy.deletionReason = reason
@@ -202,9 +219,10 @@ public actor SyncEngine {
         state = SyncStateMaintenance.pruneExpiredTombstones(
             in: state,
             now: timestamp,
-            policy: configuration.tombstoneRetention
+            policy: configuration.tombstoneRetention,
+            account: account
         )
-        try await stateStore.save(state)
+        try await stateStore.save(state, account: account)
     }
 
     /// Pull, merge, push, then commit one provider batch. If pull, merge, or push throws,
@@ -215,9 +233,31 @@ public actor SyncEngine {
             throw SyncEngineError.accountMismatch(expected: account, actual: adapter.account)
         }
 
-        let original = try await stateStore.load()
+        // Keep audit history bounded even when the engine is used directly rather than
+        // through the app coordinator's launch cleanup path. Cleanup is best-effort and
+        // cannot affect the canonical sync result.
+        _ = try? await stateStore.cleanup(asOf: startedAt, retention: SyncRunStatus.defaultRetention)
+        let durableRun = SyncRun(account: account, startedAt: startedAt)
+        // A running record is intentionally written before provider I/O. If the process
+        // dies during pull/push, the next launch can surface the unfinished run and offer
+        // retry instead of silently losing the failure.
+        await persistAuditRun(durableRun)
+
+        let original: SyncState
+        do {
+            original = try await stateStore.load(account: account)
+        } catch {
+            await persistAuditRun(failedAuditRun(durableRun, error: error, finishedAt: now()))
+            throw error
+        }
         let cursorBefore = original.cursor(for: account)?.value
-        let pulled = try await adapter.pullChanges(since: cursorBefore)
+        let pulled: RemoteChanges
+        do {
+            pulled = try await adapter.pullChanges(since: cursorBefore)
+        } catch {
+            await persistAuditRun(failedAuditRun(durableRun, error: error, finishedAt: now()))
+            throw error
+        }
         var next = original
         var counters = Counters()
         let effectiveNow = max(startedAt, pulled.serverNow)
@@ -227,7 +267,8 @@ public actor SyncEngine {
         next = SyncStateMaintenance.pruneExpiredTombstones(
             in: next,
             now: effectiveNow,
-            policy: configuration.tombstoneRetention
+            policy: configuration.tombstoneRetention,
+            account: account
         )
 
         do {
@@ -251,7 +292,7 @@ public actor SyncEngine {
             // Apply remote ID mappings returned by provider creates before calculating
             // baselines. Rejected writes deliberately leave the previous baseline so they
             // are retried on the next sync.
-            applyRemoteMappings(pushResult.mappings, to: &next, at: effectiveNow)
+            try applyRemoteMappings(pushResult.mappings, to: &next, at: effectiveNow)
             applyAcceptedBaselines(mutations: mutations, pushResult: pushResult, state: &next, at: effectiveNow)
             counters.pushed = pushResult.accepted
             counters.rejected = pushResult.rejected.count
@@ -268,10 +309,10 @@ public actor SyncEngine {
                 // Full snapshots frequently have no provider cursor; preserve the old one.
                 upsertCursor(SyncCursor(account: account, value: cursorBefore, updatedAt: effectiveNow), into: &next)
             }
-            next = SyncStateMaintenance.pruneExpiredTombstones(in: next, now: effectiveNow, policy: configuration.tombstoneRetention)
-            try await stateStore.save(next)
+            next = SyncStateMaintenance.pruneExpiredTombstones(in: next, now: effectiveNow, policy: configuration.tombstoneRetention, account: account)
+            try await stateStore.save(next, account: account)
             let finishedAt = now()
-            return SyncReport(
+            let report = SyncReport(
                 account: account,
                 startedAt: startedAt,
                 finishedAt: finishedAt,
@@ -287,9 +328,13 @@ public actor SyncEngine {
                 committed: true,
                 diagnostics: pulled.diagnostics + pushResult.diagnostics
             )
+            await persistAuditRun(completedAuditRun(durableRun, report: report))
+            return report
         } catch let error as SyncEngineError {
+            await persistAuditRun(failedAuditRun(durableRun, error: error, finishedAt: now()))
             throw error
         } catch {
+            await persistAuditRun(failedAuditRun(durableRun, error: error, finishedAt: now()))
             throw SyncEngineError.pushFailed(error.localizedDescription)
         }
     }
@@ -305,6 +350,37 @@ public actor SyncEngine {
 
     private struct ApplyOutcome {
         var mutations: [RemoteMutation] = []
+    }
+
+    private func completedAuditRun(_ run: SyncRun, report: SyncReport) -> SyncRun {
+        var completed = run
+        completed.finishedAt = report.finishedAt
+        completed.status = report.rejectedCount == 0 && report.conflictCount == 0 ? .succeeded : .partiallySucceeded
+        completed.scannedCount = report.pulledCount
+        completed.createdCount = report.createdCount
+        completed.updatedCount = report.updatedCount
+        completed.deletedCount = report.deletedCount
+        completed.conflictCount = report.conflictCount
+        completed.errorMessage = switch (report.rejectedCount, report.conflictCount) {
+        case (0, 0): nil
+        case (_, 0): "Some provider writes were rejected and will be retried."
+        default: "Sync completed with conflicts requiring review."
+        }
+        return completed
+    }
+
+    private func failedAuditRun(_ run: SyncRun, error: Error, finishedAt: Date) -> SyncRun {
+        var failed = run
+        failed.finishedAt = finishedAt
+        failed.status = .failed
+        failed.errorMessage = error.localizedDescription
+        return failed
+    }
+
+    private func persistAuditRun(_ run: SyncRun) async {
+        // Audit data is an observability aid, not the canonical commit boundary. Swallow
+        // failures so callers receive the provider/state result that actually occurred.
+        try? await stateStore.upsertSyncRun(run)
     }
 
     private func applyRemoteChanges(
@@ -369,6 +445,7 @@ public actor SyncEngine {
     ) throws {
         let mapping = state.mapping(account: account, remoteListID: remote.remoteID)
         let canonicalID = mapping?.canonicalListID ?? SyncID.deterministic(namespace: "\(account.provider.rawValue):\(account.accountID):list:\(remote.remoteID)")
+        try ensureOwnedOrClaimList(canonicalID, in: &state)
         let existingIndex = state.lists.firstIndex(where: { $0.id == canonicalID })
         let existing = existingIndex.map { state.lists[$0] }
         let base = state.listReplicas.first(where: { $0.account == account && $0.canonicalListID == canonicalID })?.lastSyncedList
@@ -430,6 +507,7 @@ public actor SyncEngine {
     ) throws {
         let existingReplica = state.replica(account: account, remoteTaskID: remote.remoteID)
         let canonicalID = existingReplica?.canonicalTaskID ?? SyncID.deterministic(namespace: "\(account.provider.rawValue):\(account.accountID):task:\(remote.remoteID)")
+        try ensureOwnedOrClaimTask(canonicalID, in: &state)
         let existingIndex = state.tasks.firstIndex(where: { $0.id == canonicalID })
         let existing = existingIndex.map { state.tasks[$0] }
         if let existing, let deletedAt = existing.deletedAt,
@@ -531,6 +609,7 @@ public actor SyncEngine {
         let pendingListConflicts = Set(state.conflicts.filter { $0.account == account && $0.resolution == .pending }.compactMap(\.canonicalListID))
 
         for list in state.lists.sorted(by: { $0.id.description < $1.id.description }) {
+            guard ownsList(list.id, in: state) else { continue }
             guard !pendingListConflicts.contains(list.id) else { continue }
             guard let mapping = accountLists.first(where: { $0.canonicalListID == list.id }) else {
                 if list.deletedAt == nil {
@@ -548,6 +627,7 @@ public actor SyncEngine {
         }
 
         for task in state.tasks.sorted(by: { $0.id.description < $1.id.description }) {
+            guard ownsTask(task.id, in: state) else { continue }
             guard !pendingTaskConflicts.contains(task.id) else { continue }
             let replica = state.taskReplicas.first { $0.externalID.account == account && $0.canonicalTaskID == task.id }
             let remoteID = replica?.externalID.remoteTaskID ?? ""
@@ -576,9 +656,10 @@ public actor SyncEngine {
         return result
     }
 
-    private func applyRemoteMappings(_ mappings: [RemoteIDMapping], to state: inout SyncState, at date: Date) {
+    private func applyRemoteMappings(_ mappings: [RemoteIDMapping], to state: inout SyncState, at date: Date) throws {
         for mapping in mappings {
             if let listID = mapping.canonicalListID {
+                try ensureOwnedList(listID, in: state)
                 upsertListMapping(ListMapping(account: account, canonicalListID: listID, remoteListID: mapping.remoteID, lastSeenAt: date), into: &state)
                 if let list = state.lists.first(where: { $0.id == listID }) {
                     let existingRevision = state.listReplicas.first { $0.account == account && $0.canonicalListID == listID }?.remoteRevision
@@ -587,6 +668,7 @@ public actor SyncEngine {
             }
             if let taskID = mapping.canonicalTaskID,
                let task = state.tasks.first(where: { $0.id == taskID }) {
+                try ensureOwnedTask(taskID, in: state)
                 let current = state.taskReplicas.first { $0.externalID.account == account && $0.canonicalTaskID == taskID }
                 let remoteID = mapping.remoteID
                 let replica = TaskReplica(
@@ -614,21 +696,23 @@ public actor SyncEngine {
         for mutation in mutations where !rejected.contains(mutationID(mutation)) {
             switch mutation {
             case let .upsertList(canonicalID, _):
-                guard let list = state.lists.first(where: { $0.id == canonicalID }),
+                guard ownsList(canonicalID, in: state),
+                      let list = state.lists.first(where: { $0.id == canonicalID }),
                       let mapping = state.listMappings.first(where: { $0.account == account && $0.canonicalListID == canonicalID }) else { continue }
                 upsertListReplica(ListReplica(account: account, canonicalListID: canonicalID, remoteListID: mapping.remoteListID, lastSyncedList: list, lastSyncedAt: date), into: &state)
             case let .deleteList(canonicalID, _, _):
-                guard let list = state.lists.first(where: { $0.id == canonicalID }),
+                guard ownsList(canonicalID, in: state),
+                      let list = state.lists.first(where: { $0.id == canonicalID }),
                       let mapping = state.listMappings.first(where: { $0.account == account && $0.canonicalListID == canonicalID }) else { continue }
                 upsertListReplica(ListReplica(account: account, canonicalListID: canonicalID, remoteListID: mapping.remoteListID, lastSyncedList: list, lastSyncedAt: date), into: &state)
             case let .upsertTask(canonicalID, _):
-                guard let task = state.tasks.first(where: { $0.id == canonicalID }) else { continue }
+                guard ownsTask(canonicalID, in: state), let task = state.tasks.first(where: { $0.id == canonicalID }) else { continue }
                 if let index = state.taskReplicas.firstIndex(where: { $0.externalID.account == account && $0.canonicalTaskID == canonicalID }) {
                     state.taskReplicas[index].lastSyncedTask = task
                     state.taskReplicas[index].lastSyncedAt = date
                 }
             case let .deleteTask(canonicalID, _, _, _):
-                guard let task = state.tasks.first(where: { $0.id == canonicalID }) else { continue }
+                guard ownsTask(canonicalID, in: state), let task = state.tasks.first(where: { $0.id == canonicalID }) else { continue }
                 if let index = state.taskReplicas.firstIndex(where: { $0.externalID.account == account && $0.canonicalTaskID == canonicalID }) {
                     state.taskReplicas[index].lastSyncedTask = task
                     state.taskReplicas[index].lastSyncedAt = date
@@ -704,6 +788,53 @@ public actor SyncEngine {
             remoteList: remote,
             createdAt: date
         ))
+    }
+
+    private func ownerOfTask(_ id: SyncID, in state: SyncState) -> SyncAccount? {
+        state.taskOwner(id)
+    }
+
+    private func ownerOfList(_ id: SyncID, in state: SyncState) -> SyncAccount? {
+        state.listOwner(id)
+    }
+
+    private func ownsTask(_ id: SyncID, in state: SyncState) -> Bool {
+        ownerOfTask(id, in: state) == account
+    }
+
+    private func ownsList(_ id: SyncID, in state: SyncState) -> Bool {
+        ownerOfList(id, in: state) == account
+    }
+
+    private func ensureNoForeignOwnership(entityType: EntityType, id: SyncID) async throws {
+        let candidates = try await stateStore.ownershipCandidates(entityType: entityType, id: id)
+        guard candidates.isEmpty || (candidates.count == 1 && candidates.contains(account)) else {
+            throw SyncEngineError.recordNotOwned(entityType: entityType, id: id)
+        }
+    }
+
+    private func ensureOwnedTask(_ id: SyncID, in state: SyncState) throws {
+        guard ownsTask(id, in: state) else { throw SyncEngineError.recordNotOwned(entityType: .task, id: id) }
+    }
+
+    private func ensureOwnedList(_ id: SyncID, in state: SyncState) throws {
+        guard ownsList(id, in: state) else { throw SyncEngineError.recordNotOwned(entityType: .list, id: id) }
+    }
+
+    private func ensureOwnedOrClaimTask(_ id: SyncID, in state: inout SyncState) throws {
+        let candidates = state.taskOwnershipCandidates(id)
+        if candidates.contains(where: { $0 != account }) || candidates.count > 1 {
+            throw SyncEngineError.recordNotOwned(entityType: .task, id: id)
+        }
+        state.taskOwners[id] = account
+    }
+
+    private func ensureOwnedOrClaimList(_ id: SyncID, in state: inout SyncState) throws {
+        let candidates = state.listOwnershipCandidates(id)
+        if candidates.contains(where: { $0 != account }) || candidates.count > 1 {
+            throw SyncEngineError.recordNotOwned(entityType: .list, id: id)
+        }
+        state.listOwners[id] = account
     }
 
     private func upsertTask(_ task: CanonicalTask, into state: inout SyncState) {

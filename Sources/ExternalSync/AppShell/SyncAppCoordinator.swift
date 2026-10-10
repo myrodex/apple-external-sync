@@ -135,6 +135,7 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
     case providerUnavailable(String)
     case oauthNotConfigured(SyncProviderChoice?)
     case oauthCallbackInvalid
+    case providerAccountMismatch(expected: SyncAccount, actual: SyncAccount)
 
     public var errorDescription: String? {
         switch self {
@@ -147,6 +148,8 @@ public enum SyncAppCoordinatorError: Error, LocalizedError, Equatable, Sendable 
         case .oauthNotConfigured(let provider):
             return provider.map { "OAuth is not configured for \($0.title) in this app target." } ?? "The OAuth callback is no longer valid."
         case .oauthCallbackInvalid: return "The OAuth callback could not be verified. Start sign-in again."
+        case let .providerAccountMismatch(expected, actual):
+            return "Provider account identity mismatch (expected \(expected.accountID), received \(actual.accountID))."
         }
     }
 }

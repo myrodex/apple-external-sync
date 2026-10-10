@@ -9,7 +9,7 @@ Apple External Sync is a Swift 6 package and protocol for synchronizing Apple Re
 - `Sources/SyncContracts` — adapter-facing provider contracts, capabilities, mutations, and errors.
 - `Sources/SyncAdapters` — provider adapters and HTTP transport.
 - `Sources/SyncEngine` — cursor-safe pull/push orchestration, deterministic three-way merges, conflict queueing, tombstone retention, and retry-safe cursor advancement.
-- `Sources/SyncStore` — SQLite-backed canonical sync checkpoints (`SyncStateStore`) plus the lower-level transactional `LocalStore` API and in-memory test doubles. Production runtime uses SQLite; JSON-file state persistence is intentionally not provided.
+- `Sources/SyncStore` — SQLite-backed, account-partitioned canonical sync checkpoints (`SyncStateStore`) plus durable sync-run history, the lower-level transactional `LocalStore` API, and in-memory test doubles. Production runtime uses SQLite; JSON-file state persistence is intentionally not provided.
 - `Sources/SyncAppSupport` — production composition boundary; `SyncRuntime` wires `SyncEngine` to `SQLiteLocalStore` and keeps provider login device-only.
 - `Apps/AppleExternalSyncApp` — runnable SwiftUI iOS and macOS application targets in `AppleExternalSync.xcodeproj`; each target links the local `ExternalSync` package product and owns platform permissions, OAuth callback registration, lifecycle/background scheduling, and packaging.
 - `Relay/` — optional stateless Vapor deployment shell; it has no persistence or provider credentials.
@@ -56,7 +56,7 @@ swift test --package-path Relay --parallel
 swift run --package-path Relay
 ```
 
-The relay's `/healthz` endpoint reports process liveness. `/readyz` and `/v1/capabilities` deliberately return a structured `503 not_configured` response because no durable, account-authorized backend is implemented. Device apps use `SyncRuntimeConfiguration(databaseURL:)`, which persists the complete canonical checkpoint in SQLite.
+The relay's `/healthz` endpoint reports process liveness. `/readyz` and `/v1/capabilities` deliberately return a structured `503 not_configured` response because no durable, account-authorized backend is implemented. Device apps use `SyncRuntimeConfiguration(databaseURL:)`, which persists the complete account-scoped canonical checkpoint and durable run history in SQLite; disconnect removes only the selected provider account's sync state and credentials.
 
 ## Security and privacy
 

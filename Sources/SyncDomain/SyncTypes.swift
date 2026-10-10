@@ -344,6 +344,11 @@ public struct SyncState: Codable, Sendable, Hashable {
     public var listReplicas: [ListReplica]
     public var conflicts: [SyncConflict]
     public var cursors: [SyncCursor]
+    /// Explicit ownership for canonical records that have not yet acquired a provider
+    /// mapping/replica (for example a newly-created local record). Ownership is persisted
+    /// so a second provider account cannot claim or push an unlinked record by ID.
+    public var taskOwners: [SyncID: SyncAccount]
+    public var listOwners: [SyncID: SyncAccount]
     public var schemaVersion: Int
 
     public init(
@@ -354,6 +359,8 @@ public struct SyncState: Codable, Sendable, Hashable {
         listReplicas: [ListReplica] = [],
         conflicts: [SyncConflict] = [],
         cursors: [SyncCursor] = [],
+        taskOwners: [SyncID: SyncAccount] = [:],
+        listOwners: [SyncID: SyncAccount] = [:],
         schemaVersion: Int = 1
     ) {
         self.lists = lists
@@ -363,7 +370,42 @@ public struct SyncState: Codable, Sendable, Hashable {
         self.listReplicas = listReplicas
         self.conflicts = conflicts
         self.cursors = cursors
+        self.taskOwners = taskOwners
+        self.listOwners = listOwners
         self.schemaVersion = schemaVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lists, tasks, listMappings, taskReplicas, listReplicas, conflicts, cursors
+        case taskOwners, listOwners, schemaVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lists = try container.decodeIfPresent([CanonicalList].self, forKey: .lists) ?? []
+        tasks = try container.decodeIfPresent([CanonicalTask].self, forKey: .tasks) ?? []
+        listMappings = try container.decodeIfPresent([ListMapping].self, forKey: .listMappings) ?? []
+        taskReplicas = try container.decodeIfPresent([TaskReplica].self, forKey: .taskReplicas) ?? []
+        listReplicas = try container.decodeIfPresent([ListReplica].self, forKey: .listReplicas) ?? []
+        conflicts = try container.decodeIfPresent([SyncConflict].self, forKey: .conflicts) ?? []
+        cursors = try container.decodeIfPresent([SyncCursor].self, forKey: .cursors) ?? []
+        taskOwners = try container.decodeIfPresent([SyncID: SyncAccount].self, forKey: .taskOwners) ?? [:]
+        listOwners = try container.decodeIfPresent([SyncID: SyncAccount].self, forKey: .listOwners) ?? [:]
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(lists, forKey: .lists)
+        try container.encode(tasks, forKey: .tasks)
+        try container.encode(listMappings, forKey: .listMappings)
+        try container.encode(taskReplicas, forKey: .taskReplicas)
+        try container.encode(listReplicas, forKey: .listReplicas)
+        try container.encode(conflicts, forKey: .conflicts)
+        try container.encode(cursors, forKey: .cursors)
+        try container.encode(taskOwners, forKey: .taskOwners)
+        try container.encode(listOwners, forKey: .listOwners)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
     }
 
     public func list(id: SyncID) -> CanonicalList? { lists.first { $0.id == id } }
@@ -383,6 +425,70 @@ public struct SyncState: Codable, Sendable, Hashable {
         listReplicas.first {
             $0.account == account && $0.remoteListID == remoteListID
         }
+    }
+    /// All persisted ownership evidence for a canonical task. An explicit owner map is
+    /// authoritative; the replica/conflict fallback exists for checkpoints written before
+    /// owner maps were introduced. A record with evidence from multiple accounts is
+    /// intentionally ambiguous and must not be projected into any account.
+    public func taskOwnershipCandidates(_ id: SyncID) -> Set<SyncAccount> {
+        var candidates = Set<SyncAccount>()
+        if let owner = taskOwners[id] { candidates.insert(owner) }
+        candidates.formUnion(taskReplicas.filter { $0.canonicalTaskID == id }.map { $0.externalID.account })
+        candidates.formUnion(conflicts.compactMap { $0.canonicalTaskID == id ? $0.account : nil })
+        return candidates
+    }
+
+    public func listOwnershipCandidates(_ id: SyncID) -> Set<SyncAccount> {
+        var candidates = Set<SyncAccount>()
+        if let owner = listOwners[id] { candidates.insert(owner) }
+        candidates.formUnion(listMappings.filter { $0.canonicalListID == id }.map(\.account))
+        candidates.formUnion(listReplicas.filter { $0.canonicalListID == id }.map(\.account))
+        candidates.formUnion(conflicts.compactMap { $0.canonicalListID == id ? $0.account : nil })
+        return candidates
+    }
+
+    public func taskOwner(_ id: SyncID) -> SyncAccount? {
+        let candidates = taskOwnershipCandidates(id)
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    public func listOwner(_ id: SyncID) -> SyncAccount? {
+        let candidates = listOwnershipCandidates(id)
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    /// Returns only records and sync metadata visible to one provider account. The full
+    /// persisted state may contain several accounts, but this projection never does. If a
+    /// legacy checkpoint contains conflicting ownership evidence, the ambiguous record is
+    /// hidden until an explicit owner map or account-specific repair resolves it.
+    public func scoped(to account: SyncAccount) -> SyncState {
+        let visibleConflicts = conflicts.filter { conflict in
+            guard conflict.account == account else { return false }
+            if let taskID = conflict.canonicalTaskID, let owner = taskOwner(taskID), owner != account { return false }
+            if let listID = conflict.canonicalListID, let owner = listOwner(listID), owner != account { return false }
+            return true
+        }
+        let taskIDs = Set(tasks.compactMap { taskOwner($0.id) == account ? $0.id : nil })
+            .union(taskOwners.compactMap { $0.value == account ? $0.key : nil })
+            .union(taskReplicas.compactMap { taskOwner($0.canonicalTaskID) == account ? $0.canonicalTaskID : nil })
+            .union(visibleConflicts.compactMap(\.canonicalTaskID))
+        let listIDs = Set(lists.compactMap { listOwner($0.id) == account ? $0.id : nil })
+            .union(listOwners.compactMap { $0.value == account ? $0.key : nil })
+            .union(listMappings.compactMap { listOwner($0.canonicalListID) == account ? $0.canonicalListID : nil })
+            .union(listReplicas.compactMap { listOwner($0.canonicalListID) == account ? $0.canonicalListID : nil })
+            .union(visibleConflicts.compactMap(\.canonicalListID))
+        return SyncState(
+            lists: lists.filter { listIDs.contains($0.id) },
+            tasks: tasks.filter { taskIDs.contains($0.id) },
+            listMappings: listMappings.filter { $0.account == account && listOwner($0.canonicalListID) == account },
+            taskReplicas: taskReplicas.filter { $0.externalID.account == account && taskOwner($0.canonicalTaskID) == account },
+            listReplicas: listReplicas.filter { $0.account == account && listOwner($0.canonicalListID) == account },
+            conflicts: visibleConflicts,
+            cursors: cursors.filter { $0.account == account },
+            taskOwners: taskOwners.filter { $0.value == account },
+            listOwners: listOwners.filter { $0.value == account },
+            schemaVersion: schemaVersion
+        )
     }
     public func cursor(for account: SyncAccount) -> SyncCursor? {
         cursors.first { $0.account == account }

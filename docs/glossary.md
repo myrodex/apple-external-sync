@@ -6,8 +6,8 @@
 - **ETag / revision** — Server/provider version metadata used for compare-and-swap writes. Clients treat both as opaque.
 - **External identity** — The tuple identifying a provider object (`source`, entity type, and provider ID).
 - **Field loss** — A provider cannot represent a submitted field exactly. The operation is rejected unless the caller explicitly accepts loss; accepted loss yields a warning.
-- **SyncStateStore** — The persistence boundary consumed by `SyncEngine`; it stores one canonical state checkpoint atomically.
-- **LocalStore** — The lower-level transactional record API for mappings, provider cursors, snapshots, tombstones, conflict records, and sync-run audit data. `SQLiteLocalStore` implements both protocols in production; an in-memory implementation supports deterministic tests.
+- **SyncStateStore** — The persistence boundary consumed by `SyncEngine`; it stores one canonical state checkpoint row per account atomically, explicit canonical-record ownership, and account-scoped durable sync-run history.
+- **LocalStore** — The lower-level transactional record API for mappings, provider cursors, snapshots, tombstones, conflict records, and sync-run audit data. `SQLiteLocalStore` implements both protocols in production; its account-partitioned checkpoint rows remain the engine checkpoints, while these tables support independent queries and APIs. An in-memory implementation supports deterministic tests.
 - **Mapping** — Durable association between an external identity and a canonical ID. Lists require explicit mappings; names are never fuzzy-matched.
 - **Mutation** — An ordered, idempotent request to create, update, or delete a canonical resource/provider representation.
 - **Provider adapter** — A boundary component that translates provider API semantics into and out of the provider-neutral contracts.

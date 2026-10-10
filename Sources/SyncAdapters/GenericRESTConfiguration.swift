@@ -380,10 +380,16 @@ public extension GenericRESTConfiguration {
 
     private func validatePath(_ path: String, label: String) throws {
         guard !path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath(label) }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let containsControlCharacter = path.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
         guard URL(string: path)?.scheme == nil,
               !path.hasPrefix("//"),
+              !path.contains("//"),
+              !path.contains("\\"),
               !path.contains("?"),
-              !path.contains("#") else {
+              !path.contains("#"),
+              !segments.contains(where: { $0 == "." || $0 == ".." }),
+              !containsControlCharacter else {
             throw GenericRESTConfigurationError.unsafeEndpointPath(path)
         }
     }

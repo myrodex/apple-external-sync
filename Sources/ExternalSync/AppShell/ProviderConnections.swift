@@ -36,6 +36,7 @@ public struct SyncProviderConnection: Sendable {
 /// inside the factory and are never persisted in the canonical sync database.
 public protocol SyncProviderConnectionFactory: Sendable {
     var choice: SyncProviderChoice { get }
+    var account: SyncAccount { get }
     func connect() async throws -> SyncProviderConnection
     func beginOAuthAuthorization() throws -> OAuthAuthorizationRequest
     func completeOAuthAuthorization(callbackURL: URL, request: OAuthAuthorizationRequest) async throws -> SyncProviderConnection
@@ -46,6 +47,7 @@ public protocol SyncProviderConnectionFactory: Sendable {
 /// UI, and stores refresh tokens only through the injected secure token store.
 public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     public typealias AdapterBuilder = @Sendable (@escaping @Sendable () async throws -> String) throws -> any ExternalSyncAdapter
+    public typealias AccountIdentityResolver = @Sendable (OAuthToken) async throws -> String
 
     public let choice: SyncProviderChoice
     public let account: SyncAccount
@@ -53,6 +55,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     public let client: PKCEOAuthClient
     public let tokenStore: any OAuthTokenStore
     public let makeAdapter: AdapterBuilder
+    public let accountIdentityResolver: AccountIdentityResolver
 
     public init(
         choice: SyncProviderChoice,
@@ -60,6 +63,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
         displayName: String? = nil,
         client: PKCEOAuthClient,
         tokenStore: any OAuthTokenStore,
+        accountIdentityResolver: @escaping AccountIdentityResolver,
         makeAdapter: @escaping AdapterBuilder
     ) {
         self.choice = choice
@@ -67,6 +71,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
         self.displayName = displayName
         self.client = client
         self.tokenStore = tokenStore
+        self.accountIdentityResolver = accountIdentityResolver
         self.makeAdapter = makeAdapter
     }
 
@@ -78,6 +83,7 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
         guard request.provider == account.provider else { throw OAuthError.callbackStateMismatch }
         guard let verifier = request.codeVerifier else { throw OAuthError.callbackMissingCode }
         let token = try await client.exchangeCode(callbackURL: callbackURL, expectedState: request.state, codeVerifier: verifier)
+        try await validateAuthenticatedIdentity(token)
         try await tokenStore.save(token, for: account)
         do { return try await discover() }
         catch {
@@ -89,8 +95,16 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
     /// Reuses an existing keychain token without launching a browser. If no token is
     /// present the caller should begin the explicit authorization flow instead.
     public func connect() async throws -> SyncProviderConnection {
-        guard try await tokenStore.token(for: account) != nil else { throw SyncAdapterError.authenticationRequired }
+        guard let token = try await tokenStore.token(for: account) else { throw SyncAdapterError.authenticationRequired }
+        try await validateAuthenticatedIdentity(token)
         return try await discover()
+    }
+
+    private func validateAuthenticatedIdentity(_ token: OAuthToken) async throws {
+        let actual = try await accountIdentityResolver(token)
+        guard actual == account.accountID else {
+            throw OAuthError.accountIdentityMismatch(expected: account.accountID, actual: actual)
+        }
     }
 
     public func disconnect() async throws {
@@ -130,10 +144,12 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
             revocationEndpoint: URL(string: "https://oauth2.googleapis.com/revoke")!,
             clientID: clientID,
             redirectURI: redirectURI,
-            scopes: ["https://www.googleapis.com/auth/tasks"]
+            scopes: ["openid", "https://www.googleapis.com/auth/tasks"]
         )
         let client = PKCEOAuthClient(configuration: configuration, transport: transport)
-        return DeviceOAuthConnectionFactory(choice: .googleTasks, account: account, displayName: "Google Tasks", client: client, tokenStore: tokenStore) { accessToken in
+        return DeviceOAuthConnectionFactory(choice: .googleTasks, account: account, displayName: "Google Tasks", client: client, tokenStore: tokenStore, accountIdentityResolver: { token in
+            try await Self.fetchProviderIdentity(endpoint: URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!, token: token, transport: transport, keys: ["sub"])
+        }) { accessToken in
             GoogleTasksAdapter(account: account, baseURL: baseURL, transport: transport, accessToken: accessToken)
         }
     }
@@ -154,12 +170,32 @@ public struct DeviceOAuthConnectionFactory: SyncProviderConnectionFactory {
             tokenEndpoint: URL(string: "https://login.microsoftonline.com/\(tenant)/oauth2/v2.0/token")!,
             clientID: clientID,
             redirectURI: redirectURI,
-            scopes: ["Tasks.ReadWrite", "offline_access"]
+            scopes: ["User.Read", "Tasks.ReadWrite", "offline_access"]
         )
         let client = PKCEOAuthClient(configuration: configuration, transport: transport)
-        return DeviceOAuthConnectionFactory(choice: .microsoftToDo, account: account, displayName: "Microsoft To Do", client: client, tokenStore: tokenStore) { accessToken in
+        return DeviceOAuthConnectionFactory(choice: .microsoftToDo, account: account, displayName: "Microsoft To Do", client: client, tokenStore: tokenStore, accountIdentityResolver: { token in
+            try await Self.fetchProviderIdentity(endpoint: URL(string: "https://graph.microsoft.com/v1.0/me")!, token: token, transport: transport, keys: ["id", "userPrincipalName"])
+        }) { accessToken in
             MicrosoftGraphAdapter(account: account, baseURL: baseURL, transport: transport, accessToken: accessToken)
         }
+    }
+
+    private static func fetchProviderIdentity(
+        endpoint: URL,
+        token: OAuthToken,
+        transport: any HTTPTransport,
+        keys: [String]
+    ) async throws -> String {
+        let request = HTTPRequestBuilder.make(url: endpoint, method: "GET", bearerToken: token.accessToken)
+        let response = try await transport.execute(request)
+        try HTTPRequestBuilder.checkSuccess(response)
+        guard let object = try JSONSerialization.jsonObject(with: response.body) as? [String: Any] else {
+            throw SyncAdapterError.invalidResponse("Provider identity response was not an object.")
+        }
+        for key in keys {
+            if let value = object[key] as? String, !value.isEmpty { return value }
+        }
+        throw SyncAdapterError.invalidResponse("Provider identity response did not contain a stable account identifier.")
     }
 }
 
@@ -206,18 +242,21 @@ public struct GenericRESTConnectionFactory: SyncProviderConnectionFactory {
     public let configuration: GenericRESTConfiguration
     private let tokenProvider: @Sendable () async throws -> String
     private let transport: any HTTPTransport
+    private let tokenStore: (any OAuthTokenStore)?
 
     public init(
         accountID: String,
         displayName: String? = "Custom REST service",
         configuration: GenericRESTConfiguration,
         transport: any HTTPTransport = URLSessionHTTPTransport(),
+        tokenStore: (any OAuthTokenStore)? = nil,
         accessToken: @escaping @Sendable () async throws -> String
     ) {
         self.account = SyncAccount(provider: .genericREST, accountID: accountID)
         self.displayName = displayName
         self.configuration = configuration
         self.transport = transport
+        self.tokenStore = tokenStore
         self.tokenProvider = accessToken
     }
 
@@ -226,7 +265,7 @@ public struct GenericRESTConnectionFactory: SyncProviderConnectionFactory {
         transport: any HTTPTransport = URLSessionHTTPTransport()
     ) {
         let tokenStore = KeychainOAuthTokenStore(service: settings.keychainService, accessGroup: settings.keychainAccessGroup)
-        self.init(accountID: settings.accountID, configuration: settings.configuration, transport: transport) {
+        self.init(accountID: settings.accountID, configuration: settings.configuration, transport: transport, tokenStore: tokenStore) {
             guard let token = try await tokenStore.token(for: SyncAccount(provider: .genericREST, accountID: settings.accountID)) else {
                 throw SyncAdapterError.authenticationRequired
             }
@@ -255,5 +294,7 @@ public struct GenericRESTConnectionFactory: SyncProviderConnectionFactory {
         )
     }
 
-    public func disconnect() async throws {}
+    public func disconnect() async throws {
+        try await tokenStore?.removeToken(for: account)
+    }
 }

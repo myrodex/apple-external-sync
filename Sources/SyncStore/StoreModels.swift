@@ -1,4 +1,5 @@
 import Foundation
+import SyncDomain
 
 /// The side of a synchronization relationship represented by a canonical snapshot.
 public enum SnapshotSide: String, Codable, Sendable, CaseIterable {
@@ -238,10 +239,19 @@ public enum SyncRunStatus: String, Codable, Sendable, CaseIterable {
     case cancelled
 }
 
+public extension SyncRunStatus {
+    static let defaultRetention: TimeInterval = 30 * 24 * 60 * 60
+}
+
 /// A durable audit record for one sync invocation.
 public struct SyncRun: Codable, Hashable, Sendable, Identifiable {
     public let id: UUID
+    /// Provider identifier retained as a string because `LocalStore` supports providers
+    /// outside the built-in `SyncProvider` enum.
     public let provider: String
+    /// Stable provider-account identity. Runs are never queried by provider alone: two
+    /// accounts on the same provider must not reveal one another's history.
+    public let accountID: String
     public let startedAt: Date
     public var finishedAt: Date?
     public var status: SyncRunStatus
@@ -255,7 +265,41 @@ public struct SyncRun: Codable, Hashable, Sendable, Identifiable {
 
     public init(
         id: UUID = UUID(),
+        account: SyncAccount,
+        startedAt: Date = Date(),
+        finishedAt: Date? = nil,
+        status: SyncRunStatus = .running,
+        scannedCount: Int = 0,
+        createdCount: Int = 0,
+        updatedCount: Int = 0,
+        deletedCount: Int = 0,
+        conflictCount: Int = 0,
+        errorMessage: String? = nil,
+        metadata: Data? = nil
+    ) {
+        self.init(
+            id: id,
+            provider: account.provider.rawValue,
+            accountID: account.accountID,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            status: status,
+            scannedCount: scannedCount,
+            createdCount: createdCount,
+            updatedCount: updatedCount,
+            deletedCount: deletedCount,
+            conflictCount: conflictCount,
+            errorMessage: errorMessage,
+            metadata: metadata
+        )
+    }
+
+    public var accountKey: String { "\(provider):\(accountID)" }
+
+    public init(
+        id: UUID = UUID(),
         provider: String,
+        accountID: String = "",
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
         status: SyncRunStatus = .running,
@@ -269,6 +313,7 @@ public struct SyncRun: Codable, Hashable, Sendable, Identifiable {
     ) {
         self.id = id
         self.provider = provider
+        self.accountID = accountID
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.status = status

@@ -32,8 +32,12 @@ struct AppleExternalSyncApp: App {
                     await lifecycle?.runBackgroundSync() ?? false
                 }
             )
-            Task {
-                try? await lifecycle.install(scheduler)
+            Task { @MainActor in
+                do {
+                    try await lifecycle.install(scheduler)
+                } catch {
+                    await live.recordBackgroundSyncError(error.localizedDescription)
+                }
             }
 #endif
             backgroundLifecycle = lifecycle
@@ -83,14 +87,24 @@ private struct LifecycleRootView: View {
                 switch phase {
                 case .active:
                     if let backgroundLifecycle {
-                        Task { _ = await backgroundLifecycle.foreground() }
+                        Task {
+                            if !(await backgroundLifecycle.foreground()) {
+                                await lifecycleHandler?.recordBackgroundSyncError("Background sync failed or could not be rescheduled.")
+                            }
+                        }
                     } else if let lifecycleHandler {
                         Task { await lifecycleHandler.applicationWillEnterForeground() }
                     }
                 case .background:
                     lifecycleHandler?.applicationDidEnterBackground()
                     if let backgroundLifecycle {
-                        Task { try? await backgroundLifecycle.scheduleNext() }
+                        Task {
+                            do {
+                                try await backgroundLifecycle.scheduleNext()
+                            } catch {
+                                await lifecycleHandler?.recordBackgroundSyncError(error.localizedDescription)
+                            }
+                        }
                     }
                 case .inactive:
                     break

@@ -358,7 +358,15 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             guard let path else { throw SyncAdapterError.unsupported("Generic REST list writes are not configured.") }
             let body = try encodeObject(list: list, fields: configuration.lists.fields)
             let response = try await request(path: path, method: list.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: list.revision)
-            let remoteID = decodeIdentifier(response.body) ?? list.remoteID
+            let remoteID: String
+            if list.remoteID.isEmpty {
+                guard let createdID = decodeIdentifier(response.body, at: configuration.lists.fields.id), !createdID.isEmpty else {
+                    throw SyncAdapterError.invalidResponse("A successful list create response did not contain the configured remote identifier.")
+                }
+                remoteID = createdID
+            } else {
+                remoteID = decodeIdentifier(response.body, at: configuration.lists.fields.id) ?? list.remoteID
+            }
             let revision = decodeRevision(response.body) ?? response.headers["etag"] ?? list.revision
             let writtenValue = (try? decoder.decode(RESTJSONValue.self, from: body)) ?? .object([:])
             return PushOneResult(mapping: RemoteIDMapping(canonicalListID: canonicalID, remoteID: remoteID, revision: revision), diagnostics: diagnostics(for: .list, id: remoteID, values: writtenValue, fields: configuration.lists.fields))
@@ -372,7 +380,15 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             guard let path else { throw SyncAdapterError.unsupported("Generic REST task writes are not configured.") }
             let body = try encodeObject(task: task, fields: configuration.tasks.fields)
             let response = try await request(path: path, method: task.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: task.revision)
-            let remoteID = decodeIdentifier(response.body) ?? task.remoteID
+            let remoteID: String
+            if task.remoteID.isEmpty {
+                guard let createdID = decodeIdentifier(response.body, at: configuration.tasks.fields.id), !createdID.isEmpty else {
+                    throw SyncAdapterError.invalidResponse("A successful task create response did not contain the configured remote identifier.")
+                }
+                remoteID = createdID
+            } else {
+                remoteID = decodeIdentifier(response.body, at: configuration.tasks.fields.id) ?? task.remoteID
+            }
             let revision = decodeRevision(response.body) ?? response.headers["etag"] ?? task.revision
             let writtenValue = (try? decoder.decode(RESTJSONValue.self, from: body)) ?? .object([:])
             return PushOneResult(mapping: RemoteIDMapping(canonicalTaskID: canonicalID, remoteID: remoteID, revision: revision), diagnostics: diagnostics(for: .task, id: remoteID, values: writtenValue, fields: configuration.tasks.fields))
@@ -458,9 +474,9 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         return try decoder.decode(RESTJSONValue.self, from: response.body)
     }
 
-    private func decodeIdentifier(_ body: Data) -> String? {
+    private func decodeIdentifier(_ body: Data, at path: RESTJSONPath) -> String? {
         guard let value = try? decoder.decode(RESTJSONValue.self, from: body) else { return nil }
-        return value.value(at: RESTJSONPath("id"))?.string()
+        return value.value(at: path)?.string()
     }
 
     private func decodeRevision(_ body: Data) -> String? {

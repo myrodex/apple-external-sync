@@ -1,4 +1,5 @@
 import Foundation
+import SyncDomain
 
 public enum LocalStoreError: Error, Equatable, Sendable, CustomStringConvertible {
     case invalidConfiguration(String)
@@ -86,6 +87,7 @@ public protocol LocalStore: Sendable {
 
     func syncRun(id: UUID) async throws -> SyncRun?
     func syncRuns(provider: String?, limit: Int?) async throws -> [SyncRun]
+    func syncRuns(account: SyncAccount, limit: Int?) async throws -> [SyncRun]
     func upsertSyncRun(_ run: SyncRun) async throws
 
     /// Removes expired tombstones and completed runs older than the retention window.

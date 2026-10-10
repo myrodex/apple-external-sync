@@ -1,4 +1,5 @@
 import Foundation
+import SyncDomain
 
 /// An actor-backed test double with the same transaction and retention semantics as
 /// `SQLiteLocalStore`. It is useful for deterministic engine tests and previews.
@@ -165,6 +166,16 @@ public actor InMemoryLocalStore: LocalStore {
         var result = state.syncRuns.values.filter { provider == nil || $0.provider == provider }.sorted {
             $0.startedAt == $1.startedAt ? $0.id.uuidString > $1.id.uuidString : $0.startedAt > $1.startedAt
         }
+        if let limit { result = Array(result.prefix(max(0, limit))) }
+        return result
+    }
+
+    public func syncRuns(account: SyncAccount, limit: Int? = nil) async throws -> [SyncRun] {
+        var result = state.syncRuns.values
+            .filter { $0.provider == account.provider.rawValue && $0.accountID == account.accountID }
+            .sorted {
+                $0.startedAt == $1.startedAt ? $0.id.uuidString > $1.id.uuidString : $0.startedAt > $1.startedAt
+            }
         if let limit { result = Array(result.prefix(max(0, limit))) }
         return result
     }

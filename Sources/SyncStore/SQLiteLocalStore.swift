@@ -18,6 +18,7 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
             if !isMemory { try Self.execute(handle, "PRAGMA journal_mode = WAL;") }
             try Self.execute(handle, "PRAGMA synchronous = NORMAL;")
             try Self.migrate(handle)
+            try Self.migrateLegacyCheckpoint(handle)
         } catch {
             sqlite3_close(handle)
             self.connection = nil
@@ -43,68 +44,121 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
 
     // MARK: - SyncStateStore
 
-    /// The sync engine owns one canonical state document per SQLite database. The
-    /// lower-level LocalStore tables remain available for provider-independent
-    /// persistence APIs, while this table is the single engine checkpoint and is
-    /// committed atomically by the same SQLite connection.
+    /// The production checkpoint is partitioned by authenticated provider account. The
+    /// legacy singleton `sync_state` row is read only by the one-time migration below.
     public func load() async throws -> SyncState {
-        let rows = try query("SELECT payload FROM sync_state WHERE id = 1;")
+        try loadAllAccountStateSynchronously()
+    }
+
+    public func load(account: SyncAccount) async throws -> SyncState {
+        let rows = try query("""
+            SELECT payload FROM sync_account_state
+            WHERE provider = ? AND account_id = ?;
+            """, bindings: [.text(account.provider.rawValue), .text(account.accountID)])
         guard let row = rows.first else { return SyncState() }
-        do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode(SyncState.self, from: row.blob("payload"))
-        } catch {
-            throw LocalStoreError.invalidData("Unable to decode canonical sync state: \(error.localizedDescription)")
+        // The physical row is already partitioned by account. Do not require legacy
+        // owner metadata here: migration may have assigned an ownerless record based on
+        // the only known account, and the row key is the authoritative boundary.
+        return try Self.decodeCheckpoint(row.blob("payload"))
+    }
+
+    public func ownershipCandidates(entityType: EntityType, id: SyncID) async throws -> Set<SyncAccount> {
+        let rows = try query("""
+            SELECT provider, account_id, payload FROM sync_account_state;
+            """)
+        var candidates = Set<SyncAccount>()
+        for row in rows {
+            guard let provider = SyncProvider(rawValue: try row.text("provider")) else { continue }
+            let account = SyncAccount(provider: provider, accountID: try row.text("account_id"))
+            let state = try Self.decodeCheckpoint(row.blob("payload"))
+            let present: Bool
+            switch entityType {
+            case .task:
+                present = state.task(id: id) != nil || state.taskOwners[id] != nil || state.taskReplicas.contains { $0.canonicalTaskID == id }
+            case .list:
+                present = state.list(id: id) != nil || state.listOwners[id] != nil || state.listMappings.contains { $0.canonicalListID == id } || state.listReplicas.contains { $0.canonicalListID == id }
+            }
+            if present { candidates.insert(account) }
         }
+        return candidates
+    }
+
+    private func loadAllAccountStateSynchronously() throws -> SyncState {
+        let rows = try query("""
+            SELECT payload FROM sync_account_state
+            ORDER BY provider ASC, account_id ASC;
+            """)
+        var result = SyncState()
+        for row in rows {
+            result = Self.mergeStates(result, try Self.decodeCheckpoint(row.blob("payload")))
+        }
+        return result
     }
 
     public func save(_ state: SyncState) async throws {
+        let partition = Self.partitionLegacyState(state)
+        try beginTransaction()
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let payload = try encoder.encode(state)
-            try execute("""
-                INSERT INTO sync_state (id, payload, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
-                """, bindings: [.blob(payload), .double(Date().timeIntervalSince1970)])
-        } catch let error as LocalStoreError {
-            throw error
+            try execute("DELETE FROM sync_account_state;")
+            try execute("DELETE FROM sync_state_quarantine;")
+            for (account, accountState) in partition.accountStates {
+                try upsertAccountCheckpoint(account: account, payload: Self.encodeCheckpoint(accountState))
+            }
+            if let quarantine = partition.quarantine {
+                try upsertQuarantineCheckpoint(quarantine, reason: partition.quarantineReason)
+            }
+            try execute("DELETE FROM sync_state WHERE id = 1;")
+            try execute("COMMIT;")
         } catch {
-            throw LocalStoreError.invalidData("Unable to encode canonical sync state: \(error.localizedDescription)")
+            try? execute("ROLLBACK;")
+            if let error = error as? LocalStoreError { throw error }
+            throw LocalStoreError.invalidData("Unable to persist account checkpoints: \(error.localizedDescription)")
         }
     }
 
-    /// Atomically removes account-owned canonical state from the single sync checkpoint.
-    /// Lower-level LocalStore rows intentionally remain untouched: those tables have no
-    /// account column and are not used by SyncEngine's account-scoped checkpoint.
-    public func remove(account: SyncAccount) async throws {
-        let current = try await load()
-        let next = current.removing(account: account)
+    /// Writes only one account row in one SQLite transaction. No other account row is
+    /// loaded or rewritten, so independent provider accounts cannot lose one another's
+    /// checkpoints even when their engines run concurrently.
+    public func save(_ state: SyncState, account: SyncAccount) async throws {
+        let payload = try Self.encodeCheckpoint(state.scoped(to: account))
+        try beginTransaction()
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let payload = try encoder.encode(next)
-            try beginTransaction()
-            do {
-                try execute("""
-                    INSERT INTO sync_state (id, payload, updated_at)
-                    VALUES (1, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
-                    """, bindings: [.blob(payload), .double(Date().timeIntervalSince1970)])
-                try execute("COMMIT;")
-            } catch {
-                try? execute("ROLLBACK;")
-                throw error
-            }
-        } catch let error as LocalStoreError {
-            throw error
+            try upsertAccountCheckpoint(account: account, payload: payload)
+            try execute("COMMIT;")
         } catch {
+            try? execute("ROLLBACK;")
+            if let error = error as? LocalStoreError { throw error }
+            throw LocalStoreError.invalidData("Unable to persist account checkpoint: \(error.localizedDescription)")
+        }
+    }
+
+    /// Disconnect removes only the selected account's checkpoint and audit history. The
+    /// quarantine table intentionally remains inaccessible until an explicit migration
+    /// repair can establish ownership safely.
+    public func remove(account: SyncAccount) async throws {
+        try beginTransaction()
+        do {
+            try execute("DELETE FROM sync_account_state WHERE provider = ? AND account_id = ?;", bindings: [.text(account.provider.rawValue), .text(account.accountID)])
+            try execute("DELETE FROM sync_runs WHERE provider = ? AND account_id = ?;", bindings: [.text(account.provider.rawValue), .text(account.accountID)])
+            try execute("COMMIT;")
+        } catch {
+            try? execute("ROLLBACK;")
+            if let error = error as? LocalStoreError { throw error }
             throw LocalStoreError.invalidData("Unable to remove account state: \(error.localizedDescription)")
         }
+    }
+
+    private func upsertAccountCheckpoint(account: SyncAccount, payload: Data) throws {
+        try execute("""
+            INSERT INTO sync_account_state (provider, account_id, payload, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(provider, account_id) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at;
+            """, bindings: [
+                .text(account.provider.rawValue), .text(account.accountID), .blob(payload),
+                .double(Date().timeIntervalSince1970)
+            ])
     }
 
     // MARK: - LocalStore
@@ -303,6 +357,14 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
         return try rows.map(syncRunFromRow)
     }
 
+    public func syncRuns(account: SyncAccount, limit: Int? = nil) async throws -> [SyncRun] {
+        var sql = Self.syncRunSelect + " WHERE provider = ? AND account_id = ? ORDER BY started_at DESC, id DESC"
+        let bindings: [SQLiteBinding] = [.text(account.provider.rawValue), .text(account.accountID)]
+        if let limit { sql += " LIMIT \(max(0, limit))" }
+        sql += ";"
+        return try query(sql, bindings: bindings).map(syncRunFromRow)
+    }
+
     public func upsertSyncRun(_ run: SyncRun) async throws {
         try await apply(StoreTransaction(syncRuns: [run]))
     }
@@ -463,11 +525,12 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
     private func upsertSyncRunSQL(_ run: SyncRun) throws {
         try execute("""
             INSERT INTO sync_runs (
-                id, provider, started_at, finished_at, status, scanned_count, created_count,
+                id, provider, account_id, started_at, finished_at, status, scanned_count, created_count,
                 updated_count, deleted_count, conflict_count, error_message, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 provider = excluded.provider,
+                account_id = excluded.account_id,
                 started_at = excluded.started_at,
                 finished_at = excluded.finished_at,
                 status = excluded.status,
@@ -479,7 +542,7 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
                 error_message = excluded.error_message,
                 metadata = excluded.metadata;
             """, bindings: [
-                .text(run.id.uuidString), .text(run.provider), .double(run.startedAt.timeIntervalSince1970),
+                .text(run.id.uuidString), .text(run.provider), .text(run.accountID), .double(run.startedAt.timeIntervalSince1970),
                 .optionalDate(run.finishedAt), .text(run.status.rawValue), .int(run.scannedCount), .int(run.createdCount),
                 .int(run.updatedCount), .int(run.deletedCount), .int(run.conflictCount), .optionalText(run.errorMessage),
                 .optionalBlob(run.metadata)
@@ -627,7 +690,214 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
             payload BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
+        """), (3, """
+        ALTER TABLE sync_runs ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_sync_runs_account_started ON sync_runs(provider, account_id, started_at DESC);
+        """), (4, """
+        CREATE TABLE IF NOT EXISTS sync_account_state (
+            provider TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            payload BLOB NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY(provider, account_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_account_state_updated ON sync_account_state(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS sync_state_quarantine (
+            key TEXT PRIMARY KEY NOT NULL,
+            payload BLOB NOT NULL,
+            reason TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
         """)]
+
+    private struct LegacyPartition {
+        var accountStates: [SyncAccount: SyncState]
+        var quarantine: SyncState?
+        var quarantineReason: String
+    }
+
+    private static let legacyQuarantineKey = "legacy-shared-state-v1"
+
+    private static func encodeCheckpoint(_ state: SyncState) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(state)
+    }
+
+    private static func decodeCheckpoint(_ payload: Data) throws -> SyncState {
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(SyncState.self, from: payload)
+        } catch {
+            throw LocalStoreError.invalidData("Unable to decode canonical sync state: \(error.localizedDescription)")
+        }
+    }
+
+    private static func mergeStates(_ lhs: SyncState, _ rhs: SyncState) -> SyncState {
+        var result = lhs
+        result.lists.append(contentsOf: rhs.lists)
+        result.tasks.append(contentsOf: rhs.tasks)
+        result.listMappings.append(contentsOf: rhs.listMappings)
+        result.taskReplicas.append(contentsOf: rhs.taskReplicas)
+        result.listReplicas.append(contentsOf: rhs.listReplicas)
+        result.conflicts.append(contentsOf: rhs.conflicts)
+        result.cursors.append(contentsOf: rhs.cursors)
+        result.taskOwners.merge(rhs.taskOwners) { _, replacement in replacement }
+        result.listOwners.merge(rhs.listOwners) { _, replacement in replacement }
+        result.schemaVersion = max(result.schemaVersion, rhs.schemaVersion)
+        return result
+    }
+
+    private static func partitionLegacyState(_ state: SyncState) -> LegacyPartition {
+        var knownAccounts = Set<SyncAccount>()
+        knownAccounts.formUnion(state.taskOwners.values)
+        knownAccounts.formUnion(state.listOwners.values)
+        knownAccounts.formUnion(state.listMappings.map(\.account))
+        knownAccounts.formUnion(state.taskReplicas.map { $0.externalID.account })
+        knownAccounts.formUnion(state.listReplicas.map(\.account))
+        knownAccounts.formUnion(state.conflicts.map(\.account))
+        knownAccounts.formUnion(state.cursors.map(\.account))
+
+        var listIDs = Set(state.lists.map(\.id))
+        listIDs.formUnion(state.listOwners.keys)
+        listIDs.formUnion(state.listMappings.map(\.canonicalListID))
+        listIDs.formUnion(state.listReplicas.map(\.canonicalListID))
+        listIDs.formUnion(state.conflicts.compactMap(\.canonicalListID))
+
+        var taskIDs = Set(state.tasks.map(\.id))
+        taskIDs.formUnion(state.taskOwners.keys)
+        taskIDs.formUnion(state.taskReplicas.map(\.canonicalTaskID))
+        taskIDs.formUnion(state.conflicts.compactMap(\.canonicalTaskID))
+
+        let soleAccount = knownAccounts.count == 1 ? knownAccounts.first : nil
+        func assign(_ candidates: Set<SyncAccount>) -> SyncAccount? {
+            if candidates.count == 1 { return candidates.first }
+            if candidates.isEmpty { return soleAccount }
+            return nil
+        }
+
+        var listAssignments: [SyncID: SyncAccount?] = [:]
+        for id in listIDs { listAssignments[id] = assign(state.listOwnershipCandidates(id)) }
+        var taskAssignments: [SyncID: SyncAccount?] = [:]
+        for id in taskIDs { taskAssignments[id] = assign(state.taskOwnershipCandidates(id)) }
+
+        // A task whose parent list is owned by another account cannot be safely migrated.
+        for task in state.tasks {
+            guard let account = taskAssignments[task.id] ?? nil, let listID = task.listID else { continue }
+            if listAssignments[listID] != account { taskAssignments[task.id] = nil }
+        }
+
+        var accountStates = Dictionary(uniqueKeysWithValues: knownAccounts.map { ($0, SyncState()) })
+        var quarantine = SyncState()
+        var hasQuarantine = false
+
+        func appendList(_ list: CanonicalList, to account: SyncAccount?) {
+            if let account { accountStates[account, default: SyncState()].lists.append(list) }
+            else { quarantine.lists.append(list); hasQuarantine = true }
+        }
+        func appendTask(_ task: CanonicalTask, to account: SyncAccount?) {
+            if let account { accountStates[account, default: SyncState()].tasks.append(task) }
+            else { quarantine.tasks.append(task); hasQuarantine = true }
+        }
+
+        for list in state.lists { appendList(list, to: listAssignments[list.id] ?? nil) }
+        for task in state.tasks { appendTask(task, to: taskAssignments[task.id] ?? nil) }
+
+        for mapping in state.listMappings {
+            guard listAssignments[mapping.canonicalListID] == mapping.account else {
+                quarantine.listMappings.append(mapping); hasQuarantine = true; continue
+            }
+            accountStates[mapping.account, default: SyncState()].listMappings.append(mapping)
+        }
+        for replica in state.listReplicas {
+            guard listAssignments[replica.canonicalListID] == replica.account else {
+                quarantine.listReplicas.append(replica); hasQuarantine = true; continue
+            }
+            accountStates[replica.account, default: SyncState()].listReplicas.append(replica)
+        }
+        for replica in state.taskReplicas {
+            let account = replica.externalID.account
+            guard taskAssignments[replica.canonicalTaskID] == account else {
+                quarantine.taskReplicas.append(replica); hasQuarantine = true; continue
+            }
+            accountStates[account, default: SyncState()].taskReplicas.append(replica)
+        }
+        for conflict in state.conflicts {
+            let assignment: SyncAccount?
+            if let taskID = conflict.canonicalTaskID { assignment = taskAssignments[taskID] ?? nil }
+            else if let listID = conflict.canonicalListID { assignment = listAssignments[listID] ?? nil }
+            else { assignment = nil }
+            guard assignment == conflict.account else {
+                quarantine.conflicts.append(conflict); hasQuarantine = true; continue
+            }
+            accountStates[conflict.account, default: SyncState()].conflicts.append(conflict)
+        }
+        for cursor in state.cursors {
+            accountStates[cursor.account, default: SyncState()].cursors.append(cursor)
+        }
+        for (id, account) in state.taskOwners {
+            guard taskAssignments[id] == account else {
+                quarantine.taskOwners[id] = account; hasQuarantine = true; continue
+            }
+            accountStates[account, default: SyncState()].taskOwners[id] = account
+        }
+        for (id, account) in state.listOwners {
+            guard listAssignments[id] == account else {
+                quarantine.listOwners[id] = account; hasQuarantine = true; continue
+            }
+            accountStates[account, default: SyncState()].listOwners[id] = account
+        }
+
+        let nonEmpty = accountStates.filter { !$0.value.lists.isEmpty || !$0.value.tasks.isEmpty || !$0.value.listMappings.isEmpty || !$0.value.taskReplicas.isEmpty || !$0.value.listReplicas.isEmpty || !$0.value.conflicts.isEmpty || !$0.value.cursors.isEmpty || !$0.value.taskOwners.isEmpty || !$0.value.listOwners.isEmpty }
+        return LegacyPartition(
+            accountStates: nonEmpty,
+            quarantine: hasQuarantine ? quarantine : nil,
+            quarantineReason: "Legacy shared checkpoint contained records with missing or conflicting account ownership."
+        )
+    }
+
+    private static func migrateLegacyCheckpoint(_ handle: OpaquePointer) throws {
+        let rows = try query(handle, "SELECT payload FROM sync_state WHERE id = 1;")
+        guard let row = rows.first else { return }
+        let state = try decodeCheckpoint(row.blob("payload"))
+        let partition = partitionLegacyState(state)
+        try execute(handle, "BEGIN IMMEDIATE;")
+        do {
+            for (account, accountState) in partition.accountStates {
+                try insertAccountCheckpoint(handle, account: account, payload: encodeCheckpoint(accountState))
+            }
+            if let quarantine = partition.quarantine {
+                try insertQuarantineCheckpoint(handle, quarantine, reason: partition.quarantineReason)
+            }
+            try execute(handle, "DELETE FROM sync_state WHERE id = 1;")
+            try execute(handle, "COMMIT;")
+        } catch {
+            try? execute(handle, "ROLLBACK;")
+            throw error
+        }
+    }
+
+    private static func insertAccountCheckpoint(_ handle: OpaquePointer, account: SyncAccount, payload: Data) throws {
+        try execute(handle, """
+            INSERT INTO sync_account_state (provider, account_id, payload, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(provider, account_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at;
+            """, bindings: [.text(account.provider.rawValue), .text(account.accountID), .blob(payload), .double(Date().timeIntervalSince1970)])
+    }
+
+    private static func insertQuarantineCheckpoint(_ handle: OpaquePointer, _ state: SyncState, reason: String) throws {
+        try execute(handle, """
+            INSERT OR REPLACE INTO sync_state_quarantine (key, payload, reason, created_at)
+            VALUES (?, ?, ?, ?);
+            """, bindings: [.text(legacyQuarantineKey), .blob(try encodeCheckpoint(state)), .text(reason), .double(Date().timeIntervalSince1970)])
+    }
+
+    private func upsertQuarantineCheckpoint(_ state: SyncState, reason: String) throws {
+        try Self.insertQuarantineCheckpoint(try requireConnection(), state, reason: reason)
+    }
 
     private enum SQLiteBinding {
         case null
@@ -851,7 +1121,7 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
 
     private func syncRunFromRow(_ row: SQLiteRow) throws -> SyncRun {
         SyncRun(
-            id: try row.uuid("id"), provider: try row.text("provider"), startedAt: try row.date("started_at"),
+            id: try row.uuid("id"), provider: try row.text("provider"), accountID: try row.text("account_id"), startedAt: try row.date("started_at"),
             finishedAt: row.optionalDate("finished_at"), status: try row.enumValue("status", as: SyncRunStatus.self),
             scannedCount: try row.int("scanned_count"), createdCount: try row.int("created_count"), updatedCount: try row.int("updated_count"),
             deletedCount: try row.int("deleted_count"), conflictCount: try row.int("conflict_count"),
@@ -867,7 +1137,7 @@ public actor SQLiteLocalStore: LocalStore, SyncStateStore {
         """
 
     private static let syncRunSelect = """
-        SELECT id, provider, started_at, finished_at, status, scanned_count, created_count,
+        SELECT id, provider, account_id, started_at, finished_at, status, scanned_count, created_count,
                updated_count, deleted_count, conflict_count, error_message, metadata
         FROM sync_runs
         """
