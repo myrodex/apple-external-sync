@@ -11,7 +11,7 @@ Apple External Sync is a Swift 6 package and protocol for synchronizing Apple Re
 - `Sources/SyncEngine` — cursor-safe pull/push orchestration, deterministic three-way merges, conflict queueing, tombstone retention, and retry-safe cursor advancement.
 - `Sources/SyncStore` — SQLite-backed canonical sync checkpoints (`SyncStateStore`) plus the lower-level transactional `LocalStore` API and in-memory test doubles. Production runtime uses SQLite; JSON-file state persistence is intentionally not provided.
 - `Sources/SyncAppSupport` — production composition boundary; `SyncRuntime` wires `SyncEngine` to `SQLiteLocalStore` and keeps provider login device-only.
-- `Apps/` — reserved platform-app locations; the current SwiftUI app shell lives under `Sources/ExternalSync/AppShell` so it can be previewed and tested in the package.
+- `Apps/AppleExternalSyncApp` — runnable SwiftUI iOS and macOS application targets in `AppleExternalSync.xcodeproj`; each target links the local `ExternalSync` package product and owns platform permissions, OAuth callback registration, lifecycle/background scheduling, and packaging.
 - `Relay/` — optional stateless Vapor deployment shell; it has no persistence or provider credentials.
 - `schemas/`, `openapi/`, `examples/` — JSON Schema, OpenAPI, and wire-contract fixtures.
 
@@ -32,6 +32,22 @@ python3 -m venv .venv
 ./scripts/validate_protocol.sh
 ./scripts/openapi.sh lint
 ```
+
+Build the Apple application targets (Xcode 27 or newer):
+
+```sh
+xcodebuild -project Apps/AppleExternalSyncApp/AppleExternalSync.xcodeproj \
+  -scheme AppleExternalSync-iOS -sdk iphonesimulator \
+  -configuration Debug -derivedDataPath .build/App-iOS \
+  CODE_SIGNING_ALLOWED=NO build
+
+xcodebuild -project Apps/AppleExternalSyncApp/AppleExternalSync.xcodeproj \
+  -scheme AppleExternalSync-macOS -sdk macosx \
+  -configuration Debug -derivedDataPath .build/App-macOS \
+  CODE_SIGNING_ALLOWED=NO build
+```
+
+The full app-target setup, signing notes, and optional public OAuth client configuration are documented in [`Apps/AppleExternalSyncApp/README.md`](Apps/AppleExternalSyncApp/README.md).
 
 Run the stateless relay separately:
 

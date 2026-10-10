@@ -1,0 +1,151 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = { };
+	objectVersion = 77;
+	objects = {
+		5A8FCB08F1DD0B9892A0D50F /* AppleExternalSyncApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B00E127BFCF69449BC0161 /* AppleExternalSyncApp.swift */; };
+		A90CA05941B51932C81807B1 /* AppleExternalSyncApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B00E127BFCF69449BC0161 /* AppleExternalSyncApp.swift */; };
+		6564E0818F04B2C0E803B16A /* ExternalSync in Frameworks */ = {isa = PBXBuildFile; productRef = 4289E30D80C5C3C3547561B6 /* ExternalSync */; };
+		40C7006CEF3B942160508E19 /* ExternalSync in Frameworks */ = {isa = PBXBuildFile; productRef = 4289E30D80C5C3C3547561B6 /* ExternalSync */; };
+		111111111111111111111111 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 333333333333333333333333 /* Assets.xcassets */; };
+		222222222222222222222222 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 333333333333333333333333 /* Assets.xcassets */; };
+		A1C5E40D7E6F4A1BA5D0C711 /* SyncAppSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0E2F08E1E14F4A8CA36B91 /* SyncAppSupport */; };
+		B2D6F51E8F705B2CB6E1D822 /* SyncAppSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0E2F08E1E14F4A8CA36B91 /* SyncAppSupport */; };
+		78B00E127BFCF69449BC0161 /* AppleExternalSyncApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/AppleExternalSyncApp.swift; sourceTree = "<group>"; };
+		4E666E31458D837894CE7D3F /* iOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = iOS-Info.plist; sourceTree = "<group>"; };
+		26C64E96B5634CC01C3E8001 /* macOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = macOS-Info.plist; sourceTree = "<group>"; };
+		333333333333333333333333 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		EB6DB4A21E06DDAC8F80F9B9 /* AppleExternalSync.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Supporting/AppleExternalSync.entitlements; sourceTree = "<group>"; };
+		41835F469DDF7C637A4EE136 /* AppleExternalSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppleExternalSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		06ACA7AB91329B5B26E58EDE /* AppleExternalSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppleExternalSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC74892263A4158F9B770726 = {isa = PBXGroup; children = (
+			EB6DB4A21E06DDAC8F80F9B9 /* AppleExternalSync.entitlements */,
+			4F9C7120535008B2C0C2FD60 /* AppleExternalSyncApp */,
+			25BE1C3D1D49D6D6F23AC32C /* Resources */,
+			C5F18D93E049623C81ECE223 /* Frameworks */,
+			99BF689EB4D71342DDF91ADE /* Products */,
+		); sourceTree = "<group>"; };
+		4F9C7120535008B2C0C2FD60 /* AppleExternalSyncApp */ = {isa = PBXGroup; children = (
+			78B00E127BFCF69449BC0161 /* AppleExternalSyncApp.swift */,
+		); sourceTree = "<group>"; };
+		25BE1C3D1D49D6D6F23AC32C /* Resources */ = {isa = PBXGroup; children = (
+			4E666E31458D837894CE7D3F /* iOS-Info.plist */,
+			26C64E96B5634CC01C3E8001 /* macOS-Info.plist */,
+			333333333333333333333333 /* Assets.xcassets */,
+		); path = Resources; sourceTree = "<group>"; };
+		C5F18D93E049623C81ECE223 /* Frameworks */ = {isa = PBXGroup; children = (); name = Frameworks; sourceTree = "<group>"; };
+		99BF689EB4D71342DDF91ADE /* Products */ = {isa = PBXGroup; children = (
+			41835F469DDF7C637A4EE136 /* AppleExternalSync.app */,
+			06ACA7AB91329B5B26E58EDE /* AppleExternalSync.app */,
+		); name = Products; sourceTree = "<group>"; };
+		60BD7F4C9595BFA79F0DD4B7 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			5A8FCB08F1DD0B9892A0D50F /* AppleExternalSyncApp.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		981DB3922CA9C08CDAA95706 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			A90CA05941B51932C81807B1 /* AppleExternalSyncApp.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		239E11FDD2F2450264F0FE01 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (111111111111111111111111 /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		8EDB955CBBE2E527EE725A4A /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (222222222222222222222222 /* Assets.xcassets in Resources */,); runOnlyForDeploymentPostprocessing = 0; };
+		31185996EC9C38F68392CB06 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (
+			6564E0818F04B2C0E803B16A /* ExternalSync in Frameworks */,
+			A1C5E40D7E6F4A1BA5D0C711 /* SyncAppSupport in Frameworks */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		A1FE09EF33E33E3E4D58621C /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (
+			40C7006CEF3B942160508E19 /* ExternalSync in Frameworks */,
+			B2D6F51E8F705B2CB6E1D822 /* SyncAppSupport in Frameworks */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		AD8EE7172D34A885DA48D352 /* AppleExternalSync iOS */ = {isa = PBXNativeTarget; buildConfigurationList = B1D1409339902ECEDA1EF37F /* Build configuration list for PBXNativeTarget "AppleExternalSync iOS" */; buildPhases = (60BD7F4C9595BFA79F0DD4B7, 239E11FDD2F2450264F0FE01, 31185996EC9C38F68392CB06); buildRules = (); dependencies = (); name = "AppleExternalSync iOS"; packageProductDependencies = (4289E30D80C5C3C3547561B6 /* ExternalSync */, 8C0E2F08E1E14F4A8CA36B91 /* SyncAppSupport */); productName = AppleExternalSync; productReference = 41835F469DDF7C637A4EE136 /* AppleExternalSync.app */; productType = "com.apple.product-type.application"; };
+		08822D393DD9ADC361D1095B /* AppleExternalSync macOS */ = {isa = PBXNativeTarget; buildConfigurationList = 942ED7A206A2E9CF00597098 /* Build configuration list for PBXNativeTarget "AppleExternalSync macOS" */; buildPhases = (981DB3922CA9C08CDAA95706, 8EDB955CBBE2E527EE725A4A, A1FE09EF33E33E3E4D58621C); buildRules = (); dependencies = (); name = "AppleExternalSync macOS"; packageProductDependencies = (4289E30D80C5C3C3547561B6 /* ExternalSync */, 8C0E2F08E1E14F4A8CA36B91 /* SyncAppSupport */); productName = AppleExternalSync; productReference = 06ACA7AB91329B5B26E58EDE /* AppleExternalSync.app */; productType = "com.apple.product-type.application"; };
+		E31F4A57BD4325762021F0AC /* XCLocalSwiftPackageReference "apple-external-sync" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../..; };
+		8C0E2F08E1E14F4A8CA36B91 /* SyncAppSupport */ = {isa = XCSwiftPackageProductDependency; package = E31F4A57BD4325762021F0AC /* XCLocalSwiftPackageReference "apple-external-sync" */; productName = SyncAppSupport; };
+		4289E30D80C5C3C3547561B6 /* ExternalSync */ = {isa = XCSwiftPackageProductDependency; package = E31F4A57BD4325762021F0AC /* XCLocalSwiftPackageReference "apple-external-sync" */; productName = ExternalSync; };
+		E5745D2A237A17CE0E10CA32 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+ALWAYS_SEARCH_USER_PATHS = NO;
+CLANG_ENABLE_MODULES = YES;
+CLANG_ENABLE_OBJC_ARC = YES;
+CODE_SIGNING_ALLOWED = NO;
+CODE_SIGNING_REQUIRED = NO;
+CODE_SIGN_IDENTITY = "";
+CURRENT_PROJECT_VERSION = 1;
+MARKETING_VERSION = 1.0;
+SWIFT_VERSION = 6.0;
+DEBUG_INFORMATION_FORMAT = dwarf;
+ENABLE_TESTABILITY = YES;
+SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+}; name = Debug; };
+		9A6A66FE42A65186B7865EA2 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+ALWAYS_SEARCH_USER_PATHS = NO;
+CLANG_ENABLE_MODULES = YES;
+CLANG_ENABLE_OBJC_ARC = YES;
+CODE_SIGNING_ALLOWED = NO;
+CODE_SIGNING_REQUIRED = NO;
+CODE_SIGN_IDENTITY = "";
+CURRENT_PROJECT_VERSION = 1;
+MARKETING_VERSION = 1.0;
+SWIFT_VERSION = 6.0;
+DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+SWIFT_OPTIMIZATION_LEVEL = "-O";
+}; name = Release; };
+		4347CD28AF997EFB68A25903 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+PRODUCT_BUNDLE_IDENTIFIER = com.myrodex.appleexternalsync.ios;
+EXTERNAL_SYNC_GOOGLE_CLIENT_ID = "";
+EXTERNAL_SYNC_MICROSOFT_CLIENT_ID = "";
+ARCHS = arm64;
+PRODUCT_NAME = "External Sync";
+INFOPLIST_FILE = Resources/iOS-Info.plist;
+SDKROOT = iphoneos;
+IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+TARGETED_DEVICE_FAMILY = "1,2";
+GENERATE_INFOPLIST_FILE = NO;
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+}; name = Debug; };
+		77DC53E3EE535B3BD480E23F /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+PRODUCT_BUNDLE_IDENTIFIER = com.myrodex.appleexternalsync.ios;
+EXTERNAL_SYNC_GOOGLE_CLIENT_ID = "";
+EXTERNAL_SYNC_MICROSOFT_CLIENT_ID = "";
+ARCHS = arm64;
+PRODUCT_NAME = "External Sync";
+INFOPLIST_FILE = Resources/iOS-Info.plist;
+SDKROOT = iphoneos;
+IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+TARGETED_DEVICE_FAMILY = "1,2";
+GENERATE_INFOPLIST_FILE = NO;
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+}; name = Release; };
+		853C05F6ECEE6E6674F89D33 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+PRODUCT_BUNDLE_IDENTIFIER = com.myrodex.appleexternalsync.macos;
+EXTERNAL_SYNC_GOOGLE_CLIENT_ID = "";
+EXTERNAL_SYNC_MICROSOFT_CLIENT_ID = "";
+ARCHS = arm64;
+PRODUCT_NAME = "External Sync";
+INFOPLIST_FILE = Resources/macOS-Info.plist;
+CODE_SIGN_ENTITLEMENTS = Supporting/AppleExternalSync.entitlements;
+SDKROOT = macosx;
+MACOSX_DEPLOYMENT_TARGET = 13.0;
+GENERATE_INFOPLIST_FILE = NO;
+LSMinimumSystemVersion = 13.0;
+}; name = Debug; };
+		4EB0806F86F84469082EF988 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+PRODUCT_BUNDLE_IDENTIFIER = com.myrodex.appleexternalsync.macos;
+EXTERNAL_SYNC_GOOGLE_CLIENT_ID = "";
+EXTERNAL_SYNC_MICROSOFT_CLIENT_ID = "";
+ARCHS = arm64;
+PRODUCT_NAME = "External Sync";
+INFOPLIST_FILE = Resources/macOS-Info.plist;
+CODE_SIGN_ENTITLEMENTS = Supporting/AppleExternalSync.entitlements;
+SDKROOT = macosx;
+MACOSX_DEPLOYMENT_TARGET = 13.0;
+GENERATE_INFOPLIST_FILE = NO;
+LSMinimumSystemVersion = 13.0;
+}; name = Release; };
+		604A3CF38156754F153703F8 /* Build configuration list for PBXProject "AppleExternalSync" */ = {isa = XCConfigurationList; buildConfigurations = (E5745D2A237A17CE0E10CA32 /* Debug */, 9A6A66FE42A65186B7865EA2 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B1D1409339902ECEDA1EF37F /* Build configuration list for PBXNativeTarget "AppleExternalSync iOS" */ = {isa = XCConfigurationList; buildConfigurations = (4347CD28AF997EFB68A25903 /* Debug */, 77DC53E3EE535B3BD480E23F /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		942ED7A206A2E9CF00597098 /* Build configuration list for PBXNativeTarget "AppleExternalSync macOS" */ = {isa = XCConfigurationList; buildConfigurations = (853C05F6ECEE6E6674F89D33 /* Debug */, 4EB0806F86F84469082EF988 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		29A76338D4FB748C32CF1CEA /* Project object */ = {isa = PBXProject; attributes = {LastSwiftUpdateCheck = 2700; LastUpgradeCheck = 2700; TargetAttributes = {
+			AD8EE7172D34A885DA48D352 = {CreatedOnToolsVersion = 27.0; };
+			08822D393DD9ADC361D1095B = {CreatedOnToolsVersion = 27.0; };
+		}; }; buildConfigurationList = 604A3CF38156754F153703F8 /* Build configuration list for PBXProject "AppleExternalSync" */; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = AC74892263A4158F9B770726; packageReferences = (E31F4A57BD4325762021F0AC /* XCLocalSwiftPackageReference "apple-external-sync" */); productRefGroup = 99BF689EB4D71342DDF91ADE /* Products */; projectDirPath = ""; projectRoot = ""; targets = (AD8EE7172D34A885DA48D352 /* AppleExternalSync iOS */, 08822D393DD9ADC361D1095B /* AppleExternalSync macOS */); };
+};
+	rootObject = 29A76338D4FB748C32CF1CEA /* Project object */;
+}
