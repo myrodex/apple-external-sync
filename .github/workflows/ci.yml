@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Swift package tests
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Run root tests
+        run: swift test --parallel
+      - name: Run stateless relay tests
+        run: swift test --package-path Relay --parallel
+
+  protocol:
+    name: Protocol and OpenAPI contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - name: Install schema validator
+        run: python -m pip install --requirement scripts/requirements.txt
+      - name: Validate schemas and examples
+        run: ./scripts/validate_protocol.sh
+      - name: Lint OpenAPI source
+        run: ./scripts/openapi.sh lint
+      - name: Run protocol regression tests
+        run: python -m unittest discover -s Tests -p 'test_*.py' -v

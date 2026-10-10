@@ -1,0 +1,22 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local secrets and generated bundles
+.env
+.env.*
+!.env.example
+openapi/dist/
+
+# Python validation/test artifacts
+__pycache__/
+*.py[cod]
+.venv/

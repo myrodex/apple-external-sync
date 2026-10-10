@@ -2,7 +2,13 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_bin="${PYTHON_BIN:-python3}"
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  python_bin="$PYTHON_BIN"
+elif [[ -x "$root_dir/.venv/bin/python" ]]; then
+  python_bin="$root_dir/.venv/bin/python"
+else
+  python_bin="python3"
+fi
 
 "$python_bin" "$root_dir/scripts/validate_protocol.py"
 
