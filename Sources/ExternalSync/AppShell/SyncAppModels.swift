@@ -371,6 +371,5 @@ public struct SyncAppSnapshot: Codable, Hashable, Sendable {
 public enum SyncConflictResolution: String, Codable, Hashable, Sendable {
     case keepLocal
     case keepRemote
-    case merge
     case dismiss
 }

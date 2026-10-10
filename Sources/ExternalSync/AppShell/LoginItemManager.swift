@@ -4,13 +4,21 @@ import Foundation
 public protocol LoginItemManaging: AnyObject {
     var isEnabled: Bool { get }
     var isSupported: Bool { get }
+    var requiresApproval: Bool { get }
     func setEnabled(_ enabled: Bool) throws
+    func openSystemSettings()
+}
+
+public extension LoginItemManaging {
+    var requiresApproval: Bool { false }
+    func openSystemSettings() {}
 }
 
 @MainActor
 public final class UnsupportedLoginItemManager: LoginItemManaging {
     public let isSupported = false
     public private(set) var isEnabled = false
+    public let requiresApproval = false
 
     public init() {}
 
@@ -18,6 +26,8 @@ public final class UnsupportedLoginItemManager: LoginItemManaging {
         guard !enabled else { return }
         isEnabled = false
     }
+
+    public func openSystemSettings() {}
 }
 
 #if os(macOS)

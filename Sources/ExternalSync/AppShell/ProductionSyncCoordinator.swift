@@ -57,6 +57,7 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         let lists = permission.canRead ? try await availableLists() : []
         selectedListIDs = selectedListIDs.intersection(Set(lists.map(\.id)))
         defaults.set(Array(selectedListIDs).sorted(), forKey: "selected-list-ids")
+        await selectedScope.set(selectedListIDs)
         let state = try await stateStore.load()
         snapshot = SyncAppSnapshot(
             connection: connection(for: provider, permission: permission),
@@ -102,7 +103,9 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
             account = SyncAccount(provider: .eventKit, accountID: "device")
             snapshot.connection = SyncConnectionState(provider: provider, status: .connected, accountName: "This device", detail: "Apple Reminders is connected. Choose lists to sync.")
             snapshot.availableLists = try await availableLists()
-            snapshot.selectedListIDs = selectedListIDs.intersection(Set(snapshot.availableLists.map(\.id)))
+            selectedListIDs = selectedListIDs.intersection(Set(snapshot.availableLists.map(\.id)))
+            snapshot.selectedListIDs = selectedListIDs
+            await selectedScope.set(selectedListIDs)
             observeChanges()
             return snapshot
         case .googleTasks, .microsoftToDo, .customREST:
@@ -175,9 +178,8 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         return snapshot
     }
 
-    public func syncNow() async throws -> SyncAppSnapshot {
+    public func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot {
         guard snapshot.connection.isConnected, let account else { throw SyncAppCoordinatorError.notConnected }
-        guard !selectedListIDs.isEmpty else { throw SyncAppCoordinatorError.noListsSelected }
         let adapter: any ExternalSyncAdapter
         if account.provider == .eventKit {
             adapter = EventKitRemindersAdapter(
@@ -187,6 +189,30 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
                 mapping: listMapping,
                 changeSource: changeSource
             )
+        } else if let activeAdapter {
+            adapter = activeAdapter
+        } else {
+            throw SyncAppCoordinatorError.notConnected
+        }
+        let engine = SyncEngine(account: account, adapter: adapter, stateStore: stateStore)
+        try await engine.applyLocalChange(change)
+        snapshot.lastError = nil
+        return snapshot
+    }
+
+    public func syncNow() async throws -> SyncAppSnapshot {
+        guard snapshot.connection.isConnected, let account else { throw SyncAppCoordinatorError.notConnected }
+        guard !selectedListIDs.isEmpty else { throw SyncAppCoordinatorError.noListsSelected }
+        let adapter: any ExternalSyncAdapter
+        if account.provider == .eventKit {
+            let eventKitAdapter = EventKitRemindersAdapter(
+                account: account,
+                store: eventStore,
+                selection: AllEventKitListsSelection(),
+                mapping: listMapping,
+                changeSource: changeSource
+            )
+            adapter = SelectedListsSyncAdapter(base: eventKitAdapter, scope: selectedScope)
         } else if let activeAdapter {
             adapter = activeAdapter
         } else {
@@ -215,7 +241,8 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         guard let conflictID = SyncID(string: id), let account else { throw SyncAppCoordinatorError.conflictNotFound }
         let adapter: any ExternalSyncAdapter
         if account.provider == .eventKit {
-            adapter = EventKitRemindersAdapter(account: account, store: eventStore, selection: ExplicitEventKitListSelection(selectedListIDs: selectedListIDs), mapping: listMapping, changeSource: changeSource)
+            let eventKitAdapter = EventKitRemindersAdapter(account: account, store: eventStore, selection: AllEventKitListsSelection(), mapping: listMapping, changeSource: changeSource)
+            adapter = SelectedListsSyncAdapter(base: eventKitAdapter, scope: selectedScope)
         } else if let activeAdapter {
             adapter = activeAdapter
         } else {
@@ -225,7 +252,6 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         let domainResolution: ConflictResolution = switch resolution {
         case .keepLocal: .localWon
         case .keepRemote: .remoteWon
-        case .merge: .merged
         case .dismiss: .dismissed
         }
         try await engine.resolveConflict(id: conflictID, resolution: domainResolution)
@@ -340,24 +366,20 @@ public final class ProductionSyncCoordinator: SyncAppCoordinator, SyncAppLifecyc
         if let microsoftClientID, !microsoftClientID.isEmpty, !microsoftClientID.contains("$(") {
             result[.microsoftToDo] = DeviceOAuthConnectionFactory.microsoftToDo(accountID: "device", clientID: microsoftClientID, redirectURI: redirectURI)
         }
-        if let baseURLString = bundle.object(forInfoDictionaryKey: "ExternalSyncRESTBaseURL") as? String,
-           let baseURL = URL(string: baseURLString), baseURL.scheme == "https" {
-            let configuration = GenericRESTConfiguration(
-                baseURL: baseURL,
-                lists: RESTCollectionDescriptor(path: "/lists", pagination: .cursor),
-                tasks: RESTCollectionDescriptor(path: "/tasks", pagination: .cursor)
-            )
-            let account = SyncAccount(provider: .genericREST, accountID: "device")
-            let tokenStore = KeychainOAuthTokenStore()
-            result[.customREST] = GenericRESTConnectionFactory(accountID: account.accountID, configuration: configuration) {
-                guard let token = try await tokenStore.token(for: account) else {
-                    throw SyncAdapterError.authenticationRequired
-                }
-                return token.accessToken
+        if let json = bundle.object(forInfoDictionaryKey: "ExternalSyncRESTConfiguration") as? String,
+           !json.isEmpty,
+           !json.contains("$(") {
+            do {
+                let settings = try GenericRESTConnectionSettings(jsonData: Data(json.utf8))
+                result[.customREST] = GenericRESTConnectionFactory(settings: settings)
+            } catch {
+                // Leave custom REST unavailable rather than silently falling back to
+                // fixed paths or an unconfigured token source.
             }
         }
         return result
     }
+
 
     public static func prepareDefaultDatabaseURL(fileManager: FileManager = .default) throws -> URL {
         let url = defaultDatabaseURL(fileManager: fileManager)
@@ -383,6 +405,7 @@ public struct ProductionSyncCoordinator: SyncAppCoordinator, Sendable {
     public func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func disconnect() async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func updateListSelection(_ selectedListIDs: Set<String>) async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
+    public func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func syncNow() async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func resolveConflict(id: String, resolution: SyncConflictResolution) async throws -> SyncAppSnapshot { throw SyncAdapterError.unavailable(message) }
     public func applicationWillEnterForeground() async {}

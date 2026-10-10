@@ -20,6 +20,8 @@ public final class SyncAppViewModel: ObservableObject {
     @Published public private(set) var loginItemError: String?
     @Published public private(set) var authorizationRequest: SyncOAuthAuthorization?
     @Published public private(set) var automaticSyncEnabled: Bool
+    @Published public private(set) var automaticSyncRequiresApproval: Bool
+    @Published public private(set) var automaticSyncSupported: Bool
 
     private let coordinator: any SyncAppCoordinator
     private let loginItemManager: any LoginItemManaging
@@ -35,6 +37,8 @@ public final class SyncAppViewModel: ObservableObject {
         self.snapshot = initialSnapshot ?? SyncAppSnapshot()
         self.phase = initialSnapshot.map(Self.phase(for:)) ?? .loading
         self.automaticSyncEnabled = loginItemManager.isEnabled
+        self.automaticSyncRequiresApproval = loginItemManager.requiresApproval
+        self.automaticSyncSupported = loginItemManager.isSupported
     }
 
     deinit {
@@ -97,6 +101,9 @@ public final class SyncAppViewModel: ObservableObject {
     }
 
     public func completeOAuthAuthorization(callbackURL: URL) {
+        // A callback is single-use; consume the pending browser request before
+        // handing the URL to the coordinator's state/PKCE verifier.
+        authorizationRequest = nil
         perform(.connectionSetup) { coordinator in
             try await coordinator.completeOAuthAuthorization(callbackURL: callbackURL)
         }
@@ -161,10 +168,22 @@ public final class SyncAppViewModel: ObservableObject {
         do {
             try loginItemManager.setEnabled(enabled)
             automaticSyncEnabled = loginItemManager.isEnabled
+            automaticSyncRequiresApproval = loginItemManager.requiresApproval
         } catch {
             loginItemError = error.localizedDescription
             automaticSyncEnabled = loginItemManager.isEnabled
+            automaticSyncRequiresApproval = loginItemManager.requiresApproval
         }
+    }
+
+    public func refreshAutomaticSyncStatus() {
+        automaticSyncEnabled = loginItemManager.isEnabled
+        automaticSyncRequiresApproval = loginItemManager.requiresApproval
+        automaticSyncSupported = loginItemManager.isSupported
+    }
+
+    public func openAutomaticSyncSettings() {
+        loginItemManager.openSystemSettings()
     }
 
     private func perform(

@@ -1,6 +1,7 @@
 import SwiftUI
 import ExternalSync
 import SyncAppSupport
+import SyncDomain
 #if canImport(BackgroundTasks) && os(iOS)
 import BackgroundTasks
 #endif
@@ -9,37 +10,52 @@ import BackgroundTasks
 struct AppleExternalSyncApp: App {
     @StateObject private var model: SyncAppViewModel
     private let lifecycleHandler: (any SyncAppLifecycleHandling)?
+    private let backgroundLifecycle: AppleSyncLifecycle?
 
     init() {
         let coordinator: any SyncAppCoordinator
         var lifecycleHandler: (any SyncAppLifecycleHandling)?
+        var backgroundLifecycle: AppleSyncLifecycle?
         do {
             let live = try ProductionSyncCoordinator()
             coordinator = live
             lifecycleHandler = live
+            let lifecycle = AppleSyncLifecycle(
+                run: { [weak live] in
+                    await live?.runBackgroundSync() ?? false
+                }
+            )
 #if canImport(BackgroundTasks) && os(iOS)
             let scheduler = IOSBackgroundSyncScheduler(
                 identifier: "com.myrodex.appleexternalsync.refresh",
-                operation: { [weak live] in
-                    _ = await live?.runBackgroundSync()
+                operation: { [weak lifecycle] in
+                    await lifecycle?.runBackgroundSync() ?? false
                 }
             )
-            try? scheduler.register()
-            try? scheduler.schedule(after: 15 * 60)
+            Task {
+                try? await lifecycle.install(scheduler)
+            }
 #endif
+            backgroundLifecycle = lifecycle
         } catch {
             let unavailable = UnavailableSyncCoordinator(error: error)
             coordinator = unavailable
             lifecycleHandler = nil
+            backgroundLifecycle = nil
         }
         self.lifecycleHandler = lifecycleHandler
+        self.backgroundLifecycle = backgroundLifecycle
         _model = StateObject(wrappedValue: SyncAppViewModel(coordinator: coordinator))
     }
 
     var body: some Scene {
         WindowGroup {
-            LifecycleRootView(model: model, lifecycleHandler: lifecycleHandler)
-                .frame(minWidth: 420, minHeight: 560)
+            LifecycleRootView(
+                model: model,
+                lifecycleHandler: lifecycleHandler,
+                backgroundLifecycle: backgroundLifecycle
+            )
+            .frame(minWidth: 420, minHeight: 560)
         }
 #if os(macOS)
         Settings {
@@ -53,16 +69,29 @@ private struct LifecycleRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: SyncAppViewModel
     let lifecycleHandler: (any SyncAppLifecycleHandling)?
+    let backgroundLifecycle: AppleSyncLifecycle?
 
     var body: some View {
         SyncAppRootView(model: model)
+            .onOpenURL { callbackURL in
+                // OAuth providers return through the app's registered URL scheme.
+                // Keep callback verification in the coordinator (state + PKCE), and
+                // let the view model publish the resulting connection snapshot.
+                model.completeOAuthAuthorization(callbackURL: callbackURL)
+            }
             .onChange(of: scenePhase) { phase in
-                guard let lifecycleHandler else { return }
                 switch phase {
                 case .active:
-                    Task { await lifecycleHandler.applicationWillEnterForeground() }
+                    if let backgroundLifecycle {
+                        Task { _ = await backgroundLifecycle.foreground() }
+                    } else if let lifecycleHandler {
+                        Task { await lifecycleHandler.applicationWillEnterForeground() }
+                    }
                 case .background:
-                    lifecycleHandler.applicationDidEnterBackground()
+                    lifecycleHandler?.applicationDidEnterBackground()
+                    if let backgroundLifecycle {
+                        Task { try? await backgroundLifecycle.scheduleNext() }
+                    }
                 case .inactive:
                     break
                 @unknown default:
@@ -99,6 +128,7 @@ private actor UnavailableSyncCoordinator: SyncAppCoordinator {
     func completeOAuthAuthorization(callbackURL: URL) async throws -> SyncAppSnapshot { throw failure }
     func disconnect() async throws -> SyncAppSnapshot { throw failure }
     func updateListSelection(_ selectedListIDs: Set<String>) async throws -> SyncAppSnapshot { throw failure }
+    func applyLocalChange(_ change: LocalChange) async throws -> SyncAppSnapshot { throw failure }
     func syncNow() async throws -> SyncAppSnapshot { throw failure }
     func resolveConflict(id: String, resolution: SyncConflictResolution) async throws -> SyncAppSnapshot { throw failure }
 }

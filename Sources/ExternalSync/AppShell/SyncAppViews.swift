@@ -306,7 +306,6 @@ public struct SyncDashboardView: View {
                     Menu("Resolve") {
                         Button("Keep local") { model.resolveConflict(id: conflict.id, resolution: .keepLocal) }
                         Button("Keep remote") { model.resolveConflict(id: conflict.id, resolution: .keepRemote) }
-                        Button("Merge fields") { model.resolveConflict(id: conflict.id, resolution: .merge) }
                         Divider()
                         Button("Dismiss", role: .destructive) { model.resolveConflict(id: conflict.id, resolution: .dismiss) }
                     }
@@ -397,8 +396,21 @@ public struct SyncSettingsView: View {
                         get: { model.automaticSyncEnabled },
                         set: { model.setAutomaticSyncEnabled($0) }
                     ))
-                    .disabled(!LoginItemManagerFactory.makeDefault().isSupported)
+                    .disabled(!model.automaticSyncSupported || model.automaticSyncRequiresApproval)
                     #if os(macOS)
+                    if model.automaticSyncRequiresApproval {
+                        Label("Approval required in System Settings.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Button("Open Login Items settings") {
+                            model.openAutomaticSyncSettings()
+                        }
+                    } else {
+                        Label(
+                            model.automaticSyncEnabled ? "Enabled" : "Disabled",
+                            systemImage: model.automaticSyncEnabled ? "checkmark.circle.fill" : "circle"
+                        )
+                        .foregroundStyle(model.automaticSyncEnabled ? .green : .secondary)
+                    }
                     Text("This uses the macOS login-item service. It does not duplicate the sync engine.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -407,12 +419,22 @@ public struct SyncSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     #endif
+                    if model.automaticSyncRequiresApproval {
+                        Text("macOS requires approval for this login item.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Button("Open Login Items Settings") {
+                            model.openAutomaticSyncSettings()
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     if let error = model.loginItemError {
                         Text(error).foregroundStyle(.red)
                     }
                 }
             }
             .navigationTitle("Sync settings")
+            .task { model.refreshAutomaticSyncStatus() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
