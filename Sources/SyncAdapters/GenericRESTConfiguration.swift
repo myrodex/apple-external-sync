@@ -390,6 +390,7 @@ public extension GenericRESTConfiguration {
         guard !path.isEmpty else { throw GenericRESTConfigurationError.missingEndpointPath(label) }
         let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let containsControlCharacter = path.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        let hasEncodedTraversal = Self.hasTraversalAfterPercentDecoding(path)
         guard URL(string: path)?.scheme == nil,
               !path.hasPrefix("//"),
               !path.contains("//"),
@@ -397,9 +398,23 @@ public extension GenericRESTConfiguration {
               !path.contains("?"),
               !path.contains("#"),
               !segments.contains(where: { $0 == "." || $0 == ".." }),
+              !hasEncodedTraversal,
               !containsControlCharacter else {
             throw GenericRESTConfigurationError.unsafeEndpointPath(path)
         }
+    }
+
+    private static func hasTraversalAfterPercentDecoding(_ path: String) -> Bool {
+        var decoded = path
+        for _ in 0..<6 {
+            let components = decoded.split(whereSeparator: { $0 == "/" || $0 == "\\" })
+            if components.contains(where: { $0 == "." || $0 == ".." }) { return true }
+            guard let next = decoded.removingPercentEncoding, next != decoded else { return false }
+            decoded = next
+        }
+        // Deeply nested percent encoding is not needed for a route template and is
+        // rejected rather than delegated to a proxy/server with different decode rules.
+        return decoded.contains("%")
     }
 
     private func validateMutation(_ endpoint: RESTMutationEndpoint, label: String) throws {

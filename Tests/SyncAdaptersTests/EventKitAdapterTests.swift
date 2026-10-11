@@ -67,6 +67,29 @@ final class EventKitAdapterTests: XCTestCase {
         XCTAssertTrue(changes.isFullSnapshot)
     }
 
+    func testReminderSnapshotMapperRunsOffMainActorLikeEventKitSearchCallback() async throws {
+        let snapshot = await Task.detached {
+            EventKitReminderSnapshotMapper.make(EventKitReminderFields(
+                id: "task-1",
+                listID: "work",
+                title: "Callback task",
+                notes: "Search queue",
+                isCompleted: true,
+                dueDate: EventKitReminderSnapshotMapper.date(from: DateComponents(year: 2026, month: 10, day: 11)),
+                completedAt: Date(timeIntervalSince1970: 100),
+                priority: EventKitReminderSnapshotMapper.taskPriority(from: 9),
+                createdAt: Date(timeIntervalSince1970: 50),
+                updatedAt: Date(timeIntervalSince1970: 100)
+            ))
+        }.value
+
+        XCTAssertEqual(snapshot.id, "task-1")
+        XCTAssertEqual(snapshot.listID, "work")
+        XCTAssertEqual(snapshot.title, "Callback task")
+        XCTAssertEqual(snapshot.priority, .low)
+        XCTAssertTrue(snapshot.isCompleted)
+    }
+
     func testPullRequiresReadableAccessAndRequestAccessUpdatesFakeStatus() async throws {
         let store = FakeEventKitStore(status: .notDetermined)
         let adapter = EventKitRemindersAdapter(

@@ -6,6 +6,58 @@ import SyncContracts
 @preconcurrency import EventKit
 import CoreGraphics
 
+/// Values copied from an EventKit reminder before the callback resumes the
+/// async continuation. The callback queue never sends an EKReminder object across
+/// an actor boundary; it sends only this immutable value.
+struct EventKitReminderFields: Sendable {
+    let id: String
+    let listID: String
+    let title: String
+    let notes: String?
+    let isCompleted: Bool
+    let dueDate: Date?
+    let completedAt: Date?
+    let priority: TaskPriority
+    let createdAt: Date
+    let updatedAt: Date
+}
+
+/// Pure Sendable boundary used by the EventKit callback mapper. Keeping the
+/// value conversion separate makes callback-queue behavior testable without a live
+/// EventKit database and prevents accidental actor isolation from returning.
+struct EventKitReminderSnapshotMapper {
+    nonisolated static func make(_ fields: EventKitReminderFields) -> EventKitReminderSnapshot {
+        EventKitReminderSnapshot(
+            id: fields.id,
+            listID: fields.listID,
+            title: fields.title,
+            notes: fields.notes,
+            isCompleted: fields.isCompleted,
+            dueDate: fields.dueDate,
+            completedAt: fields.completedAt,
+            priority: fields.priority,
+            createdAt: fields.createdAt,
+            updatedAt: fields.updatedAt
+        )
+    }
+
+    nonisolated static func date(from components: DateComponents?) -> Date? {
+        guard let components else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = components.timeZone ?? .current
+        return calendar.date(from: components)
+    }
+
+    nonisolated static func taskPriority(from value: Int) -> TaskPriority {
+        switch value {
+        case 1...3: return .high
+        case 4...6: return .medium
+        case 7...9: return .low
+        default: return .none
+        }
+    }
+}
+
 /// Main-actor EventKit implementation behind the adapter's testable store protocol.
 /// EventKit objects are not Sendable; one store instance is kept on the main actor and
 /// all provider work is serialized there while the adapter remains actor-isolated.
@@ -60,6 +112,9 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
         guard !calendars.isEmpty else { return [] }
         let reminders: [EventKitReminderSnapshot] = await withCheckedContinuation { continuation in
             eventStore.fetchReminders(matching: eventStore.predicateForReminders(in: calendars)) { values in
+                // EventKit invokes this completion on its reminders-search queue. Convert
+                // non-Sendable EventKit objects to value snapshots here using only
+                // nonisolated helpers; never hop EKReminder objects to the main actor.
                 let snapshots = values?.compactMap(Self.snapshot(_:)) ?? []
                 continuation.resume(returning: snapshots)
             }
@@ -177,48 +232,45 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
         }
     }
 
-    private static func snapshot(_ reminder: EKReminder) -> EventKitReminderSnapshot? {
+    /// EventKit invokes `fetchReminders`' completion on its own reminders-search
+    /// queue. This mapper is deliberately nonisolated: it must not inherit the
+    /// `@MainActor` isolation of `EventKitStore`, otherwise the callback can hit an
+    /// executor assertion before the continuation is resumed. Only immutable values
+    /// leave the callback; the EKReminder object itself never crosses an actor.
+    nonisolated private static func snapshot(_ reminder: EKReminder) -> EventKitReminderSnapshot? {
         guard let calendarID = reminder.calendar?.calendarIdentifier, !calendarID.isEmpty else { return nil }
         let createdAt = reminder.creationDate ?? reminder.lastModifiedDate ?? Date(timeIntervalSince1970: 0)
         let updatedAt = reminder.lastModifiedDate ?? createdAt
-        return EventKitReminderSnapshot(
+        return EventKitReminderSnapshotMapper.make(EventKitReminderFields(
             id: reminder.calendarItemIdentifier,
             listID: calendarID,
             title: reminder.title,
             notes: reminder.notes,
             isCompleted: reminder.isCompleted,
-            dueDate: Self.date(from: reminder.dueDateComponents),
+            dueDate: EventKitReminderSnapshotMapper.date(from: reminder.dueDateComponents),
             completedAt: reminder.completionDate,
-            priority: Self.priority(from: reminder.priority),
+            priority: EventKitReminderSnapshotMapper.taskPriority(from: reminder.priority),
             createdAt: createdAt,
             updatedAt: updatedAt
-        )
+        ))
     }
 
-    private static func date(from components: DateComponents?) -> Date? {
-        guard let components else { return nil }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = components.timeZone ?? .current
-        return calendar.date(from: components)
+    nonisolated private static func date(from components: DateComponents?) -> Date? {
+        EventKitReminderSnapshotMapper.date(from: components)
     }
 
-    private static func dateComponents(from date: Date?) -> DateComponents? {
+    nonisolated private static func dateComponents(from date: Date?) -> DateComponents? {
         guard let date else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         return calendar.dateComponents([.calendar, .timeZone, .year, .month, .day, .hour, .minute, .second], from: date)
     }
 
-    private static func priority(from value: Int) -> TaskPriority {
-        switch value {
-        case 1...3: return .high
-        case 4...6: return .medium
-        case 7...9: return .low
-        default: return .none
-        }
+    nonisolated private static func priority(from value: Int) -> TaskPriority {
+        EventKitReminderSnapshotMapper.taskPriority(from: value)
     }
 
-    private static func eventKitPriority(_ value: TaskPriority) -> Int {
+    nonisolated private static func eventKitPriority(_ value: TaskPriority) -> Int {
         switch value {
         case .urgent, .high: return 1
         case .medium: return 5
@@ -227,7 +279,7 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
         }
     }
 
-    private static func hexColor(_ color: CGColor?) -> String? {
+    nonisolated private static func hexColor(_ color: CGColor?) -> String? {
         guard let color,
               let rgb = color.converted(to: CGColorSpaceCreateDeviceRGB(), intent: .defaultIntent, options: nil),
               let values = rgb.components,
@@ -238,7 +290,7 @@ public final class EventKitStore: EventKitRemindersStore, @unchecked Sendable {
         return String(format: "#%02X%02X%02X", Int((red * 255).rounded()), Int((green * 255).rounded()), Int((blue * 255).rounded()))
     }
 
-    private static func cgColor(from string: String) -> CGColor? {
+    nonisolated private static func cgColor(from string: String) -> CGColor? {
         let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value.hasPrefix("#") else { return nil }
         let hex = String(value.dropFirst())

@@ -61,8 +61,10 @@ public enum HTTPRequestBuilder {
         bearerToken: String,
         query: [URLQueryItem] = [],
         body: Data? = nil,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        pathParameters: [String: String] = [:]
     ) throws -> URLRequest {
+        try validatePathParameters(pathParameters)
         let url: URL
         if let absolute = URL(string: path), absolute.scheme != nil {
             guard var components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
@@ -77,7 +79,7 @@ public enum HTTPRequestBuilder {
             }
             let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let relativePath = path.split(separator: "/", omittingEmptySubsequences: true)
-                .map { Self.encodePathSegment(String($0)) }
+                .map { Self.encodePathSegment(Self.resolvePathSegment(String($0), parameters: pathParameters)) }
                 .joined(separator: "/")
             components.percentEncodedPath = [basePath, relativePath].filter { !$0.isEmpty }.joined(separator: "/").isEmpty
                 ? "/"
@@ -87,6 +89,34 @@ public enum HTTPRequestBuilder {
             url = resolved
         }
         return make(url: url, method: method, bearerToken: bearerToken, body: body, headers: headers)
+    }
+
+    private static func validatePathParameters(_ parameters: [String: String]) throws {
+        for value in parameters.values {
+            var decoded = value
+            for _ in 0..<6 {
+                let hasControl = decoded.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+                guard decoded != ".", decoded != "..",
+                      !decoded.contains("/"), !decoded.contains("\\"),
+                      !decoded.contains("?"), !decoded.contains("#"), !hasControl else {
+                    throw SyncAdapterError.unsafeProviderURL("a provider identifier cannot be used as a safe path segment")
+                }
+                guard let next = decoded.removingPercentEncoding, next != decoded else { break }
+                decoded = next
+            }
+        }
+    }
+
+    private static func resolvePathSegment(_ segment: String, parameters: [String: String]) -> String {
+        if segment.hasPrefix("{") && segment.hasSuffix("}") {
+            let key = String(segment.dropFirst().dropLast())
+            if let value = parameters[key] { return value }
+        }
+        if segment.hasPrefix(":") {
+            let key = String(segment.dropFirst())
+            if let value = parameters[key] { return value }
+        }
+        return segment
     }
 
     private static func encodePathSegment(_ value: String) -> String {

@@ -403,6 +403,76 @@ final class ExternalProviderAdaptersTests: XCTestCase {
         XCTAssertTrue(result.rejected[0].reason.contains("remote identifier"))
     }
 
+    func testGenericRESTRejectsUnsafeProviderIDsBeforeSendingBearerToken() async throws {
+        let unsafeIDs = ["../private", ".", "..", "encoded%2Fslash", "encoded%2fslash", "encoded%2e%2e", "id?query", "id#fragment"]
+        let config = GenericRESTConfiguration(
+            baseURL: URL(string: "https://rest.example.test")!,
+            lists: RESTCollectionDescriptor(path: "/collections"),
+            tasks: RESTCollectionDescriptor(path: "/items"),
+            listMutations: RESTMutationEndpoint(updatePath: "/collections/{id}", deletePath: "/collections/{id}"),
+            taskMutations: RESTMutationEndpoint(deletePath: "/items/{id}")
+        )
+
+        for id in unsafeIDs {
+            let transport = MockHTTPTransport([])
+            let adapter = GenericRESTAdapter(
+                account: SyncAccount(provider: .genericREST, accountID: "rest"),
+                configuration: config,
+                transport: transport,
+                accessToken: { "secret" }
+            )
+            let mutation = RemoteMutation.upsertList(
+                canonicalListID: SyncID.deterministic(namespace: "rest:unsafe-id:\(id)"),
+                list: RemoteList(remoteID: id, name: "Existing")
+            )
+
+            let result = try await adapter.push([mutation], cursor: nil)
+            XCTAssertEqual(result.accepted, 0, "Unsafe ID \(String(reflecting: id)) must not be accepted")
+            XCTAssertEqual(result.rejected.count, 1, "Unsafe ID \(String(reflecting: id)) must be rejected")
+            XCTAssertTrue(result.rejected.first?.reason.contains("safe nonempty path segment") == true)
+            let requests = await transport.requests
+            XCTAssertTrue(requests.isEmpty, "Unsafe ID \(String(reflecting: id)) must be rejected before HTTP")
+        }
+
+        let emptyIDTransport = MockHTTPTransport([])
+        let emptyIDAdapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "rest"),
+            configuration: config,
+            transport: emptyIDTransport,
+            accessToken: { "secret" }
+        )
+        let emptyDelete = RemoteMutation.deleteList(
+            canonicalListID: SyncID.deterministic(namespace: "rest:empty-id"),
+            remoteID: "",
+            revision: nil
+        )
+        let emptyResult = try await emptyIDAdapter.push([emptyDelete], cursor: nil)
+        XCTAssertEqual(emptyResult.accepted, 0)
+        XCTAssertEqual(emptyResult.rejected.count, 1)
+        XCTAssertTrue(emptyResult.rejected.first?.reason.contains("safe nonempty path segment") == true)
+        let emptyRequests = await emptyIDTransport.requests
+        XCTAssertTrue(emptyRequests.isEmpty)
+
+        let transport = MockHTTPTransport([.json("{}")])
+        let adapter = GenericRESTAdapter(
+            account: SyncAccount(provider: .genericREST, accountID: "rest"),
+            configuration: config,
+            transport: transport,
+            accessToken: { "secret" }
+        )
+        let normalMutation = RemoteMutation.upsertList(
+            canonicalListID: SyncID.deterministic(namespace: "rest:normal-id"),
+            list: RemoteList(remoteID: "list-123", name: "Existing")
+        )
+        let normalResult = try await adapter.push([normalMutation], cursor: nil)
+        XCTAssertEqual(normalResult.accepted, 1)
+        let normalRequests = await transport.requests
+        XCTAssertEqual(normalRequests.count, 1)
+        XCTAssertEqual(normalRequests[0].url?.host, "rest.example.test")
+        XCTAssertEqual(normalRequests[0].url?.path, "/collections/list-123")
+        XCTAssertEqual(normalRequests[0].value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
     func testPendingOAuthConfigurationCanBeExpiredAndRemoved() async throws {
         let store = InMemoryOAuthPendingAuthorizationStore()
         let request = OAuthAuthorizationRequest(provider: .microsoftGraph, authorizationURL: URL(string: "https://login.test")!, state: "s", codeVerifier: "v")

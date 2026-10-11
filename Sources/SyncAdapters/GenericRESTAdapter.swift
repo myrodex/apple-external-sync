@@ -366,10 +366,10 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         switch mutation {
         case let .upsertList(canonicalID, list):
             let endpoint = configuration.listMutations
-            let path = list.remoteID.isEmpty ? endpoint.createPath : endpoint.updatePath.map { substitute($0, id: list.remoteID) }
+            let path = list.remoteID.isEmpty ? endpoint.createPath : endpoint.updatePath
             guard let path else { throw SyncAdapterError.unsupported("Generic REST list writes are not configured.") }
             let body = try encodeObject(list: list, fields: configuration.lists.fields)
-            let response = try await request(path: path, method: list.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: list.revision)
+            let response = try await request(path: path, method: list.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: list.revision, pathParameters: list.remoteID.isEmpty ? [:] : ["id": list.remoteID])
             let remoteID: String
             if list.remoteID.isEmpty {
                 guard let createdID = decodeIdentifier(response.body, at: configuration.lists.fields.id), !createdID.isEmpty else {
@@ -384,14 +384,14 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             return PushOneResult(mapping: RemoteIDMapping(canonicalListID: canonicalID, remoteID: remoteID, revision: revision), diagnostics: diagnostics(for: .list, id: remoteID, values: writtenValue, fields: configuration.lists.fields))
         case let .deleteList(canonicalID, remoteID, revision):
             guard let path = configuration.listMutations.deletePath else { throw SyncAdapterError.unsupported("Generic REST list deletion is not configured.") }
-            let response = try await request(path: substitute(path, id: remoteID), method: configuration.listMutations.deleteMethod, token: token, revision: revision)
+            let response = try await request(path: path, method: configuration.listMutations.deleteMethod, token: token, revision: revision, pathParameters: ["id": remoteID])
             return PushOneResult(mapping: RemoteIDMapping(canonicalListID: canonicalID, remoteID: remoteID, revision: response.headers["etag"] ?? revision), diagnostics: [])
         case let .upsertTask(canonicalID, task):
             let endpoint = configuration.taskMutations
-            let path = task.remoteID.isEmpty ? endpoint.createPath : endpoint.updatePath.map { substitute($0, id: task.remoteID) }
+            let path = task.remoteID.isEmpty ? endpoint.createPath : endpoint.updatePath
             guard let path else { throw SyncAdapterError.unsupported("Generic REST task writes are not configured.") }
             let body = try encodeObject(task: task, fields: configuration.tasks.fields)
-            let response = try await request(path: path, method: task.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: task.revision)
+            let response = try await request(path: path, method: task.remoteID.isEmpty ? endpoint.createMethod : endpoint.updateMethod, token: token, body: body, revision: task.revision, pathParameters: task.remoteID.isEmpty ? [:] : ["id": task.remoteID])
             let remoteID: String
             if task.remoteID.isEmpty {
                 guard let createdID = decodeIdentifier(response.body, at: configuration.tasks.fields.id), !createdID.isEmpty else {
@@ -406,7 +406,7 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             return PushOneResult(mapping: RemoteIDMapping(canonicalTaskID: canonicalID, remoteID: remoteID, revision: revision), diagnostics: diagnostics(for: .task, id: remoteID, values: writtenValue, fields: configuration.tasks.fields))
         case let .deleteTask(canonicalID, remoteID, _, revision):
             guard let path = configuration.taskMutations.deletePath else { throw SyncAdapterError.unsupported("Generic REST task deletion is not configured.") }
-            let response = try await request(path: substitute(path, id: remoteID), method: configuration.taskMutations.deleteMethod, token: token, revision: revision)
+            let response = try await request(path: path, method: configuration.taskMutations.deleteMethod, token: token, revision: revision, pathParameters: ["id": remoteID])
             return PushOneResult(mapping: RemoteIDMapping(canonicalTaskID: canonicalID, remoteID: remoteID, revision: response.headers["etag"] ?? revision), diagnostics: [])
         }
     }
@@ -438,8 +438,12 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
         query: [URLQueryItem] = [],
         body: Data? = nil,
         revision: String? = nil,
-        allowAbsoluteSameOrigin: Bool = false
+        allowAbsoluteSameOrigin: Bool = false,
+        pathParameters: [String: String] = [:]
     ) async throws -> HTTPResponse {
+        for (name, value) in pathParameters {
+            try Self.validatePathParameter(value, name: name)
+        }
         var headers: [String: String] = [:]
         if let revision { headers["If-Match"] = revision }
         guard configuration.baseURL.scheme?.lowercased() == "https", configuration.baseURL.host != nil else {
@@ -461,12 +465,30 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
             }
             request = HTTPRequestBuilder.make(url: resolved, method: method, bearerToken: token, body: body, headers: headers)
         } else {
-            request = try HTTPRequestBuilder.make(baseURL: configuration.baseURL, path: path, method: method, bearerToken: token, query: query, body: body, headers: headers)
+            request = try HTTPRequestBuilder.make(baseURL: configuration.baseURL, path: path, method: method, bearerToken: token, query: query, body: body, headers: headers, pathParameters: pathParameters)
         }
         let response = try await transport.execute(request)
         if response.statusCode == 412 { throw SyncAdapterError.conditionalWriteFailed(remoteRevision: response.headers["etag"] ?? revision) }
         try HTTPRequestBuilder.checkSuccess(response)
         return response
+    }
+
+    /// Provider IDs are untrusted input. Keep them as one URI path segment, rejecting
+    /// separators and ambiguous encodings rather than allowing URL normalization or a
+    /// downstream double-decode to reinterpret the identifier as traversal/query data.
+    private static func validatePathParameter(_ value: String, name: String) throws {
+        let containsControlCharacter = value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        guard !value.isEmpty,
+              value != ".",
+              value != "..",
+              !value.contains("/"),
+              !value.contains("\\"),
+              !value.contains("%"),
+              !value.contains("?"),
+              !value.contains("#"),
+              !containsControlCharacter else {
+            throw SyncAdapterError.unsafeProviderURL("the Generic REST path parameter \(name) is not a safe nonempty path segment")
+        }
     }
 
     private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
@@ -494,10 +516,6 @@ public struct GenericRESTAdapter: ExternalSyncAdapter, FieldDiagnosticsProviding
     private func decodeRevision(_ body: Data) -> String? {
         guard let value = try? decoder.decode(RESTJSONValue.self, from: body) else { return nil }
         return value.value(at: RESTJSONPath("revision"))?.string() ?? value.value(at: RESTJSONPath("etag"))?.string()
-    }
-
-    private func substitute(_ path: String, id: String) -> String {
-        path.replacingOccurrences(of: "{id}", with: id).replacingOccurrences(of: ":id", with: id)
     }
 
     private static func priority(_ value: RESTJSONValue) -> TaskPriority? {
